@@ -14,6 +14,17 @@ situational awareness. It shall detect signal activity, maintain persistent
 contacts, communicate confidence and data quality honestly, and preserve
 evidence for later review.
 
+The first operational use case is passive awareness of possible drone activity
+in the operator's immediate home area, using only lawfully received broadcasts,
+RF measurements, and locally authorized sensors. The system should help answer:
+
+- Is there credible evidence of a drone nearby?
+- Is a standards-compliant Remote ID broadcast present?
+- What location, altitude, velocity, or identity data did that broadcast
+  provide?
+- What direction and distance can be calculated from measured data?
+- Which conclusions are measured, derived, or merely suspected?
+
 Aegis v1 is the common software foundation for independently operated or
 networked Scout, Tracker, Sentinel, Air Node, Relay, and Command deployments.
 
@@ -49,11 +60,15 @@ networked Scout, Tracker, Sentinel, Air Node, Relay, and Command deployments.
 - Operator-visible sensor health and data provenance
 - Exportable diagnostic logs
 - Clean shutdown and recovery after interrupted operation
+- Remote ID receiver adapter and message recording
+- Correlation of Remote ID observations with RF contact history when supported
+- Relative distance, bearing, and heading derived from valid position or
+  velocity data, with the calculation source displayed
 
 ### Designed for, but not required for initial v1 acceptance
 
 - Multiple cooperative nodes
-- Direction-finding adapters
+- Multi-antenna direction-finding adapters
 - GPS and time-source adapters
 - Contact classification
 - Alert policies
@@ -66,6 +81,8 @@ networked Scout, Tracker, Sentinel, Air Node, Relay, and Command deployments.
 - Unsupported claims of emitter identity or location
 - Dependence on proprietary cloud services
 - The complete illustrated hardware product family
+- Claims that generic RF energy alone proves a drone is present
+- Distance or heading estimates without a measured basis and uncertainty
 
 ## 4. Deployment profiles
 
@@ -95,6 +112,10 @@ on the capabilities of other profiles.
 | FR-010 | Recover safely from a source or sensor failure | Fault-injection test |
 | FR-011 | Export logs without modifying the original recording | Hash comparison and export test |
 | FR-012 | Use versioned event and recording schemas | Compatibility test across schema versions |
+| FR-013 | Receive and validate supported Remote ID broadcasts through a replaceable adapter | Cooperative-drone or standards-compliant test transmitter |
+| FR-014 | Calculate relative bearing and distance from valid local and reported positions | Known-coordinate test cases |
+| FR-015 | Preserve reported heading or derive motion heading from timestamped positions | Recorded trajectory comparison |
+| FR-016 | Correlate observations without merging unrelated RF and Remote ID contacts silently | Positive and negative correlation scenarios |
 
 ## 6. Performance decisions
 
@@ -118,6 +139,11 @@ each deployment profile.
 
 No performance claim is considered satisfied solely because it works with the
 current simulator.
+
+For the home-area use case, detection range is not a single fixed requirement:
+it depends on transmitter behavior, obstruction, antenna placement, receiver
+sensitivity, local interference, and whether Remote ID is present. Range targets
+will be established from a site survey and controlled outdoor trials.
 
 ## 7. Data requirements
 
@@ -197,7 +223,10 @@ Unknown values must be absent or explicitly unavailable, never silently zero.
 
 ### Gate E: v1 field trial
 
-- Selected operational requirements are measured in an authorized environment
+- A cooperative drone is flown in an authorized environment along a known path
+- Aegis records Remote ID when present and labels its provenance
+- Calculated distance and heading are compared with the known path
+- RF-only observations remain labeled as possible activity rather than identity
 - False alarms and misses are reviewed from recordings
 - Failures produce actionable diagnostics
 
@@ -205,9 +234,9 @@ Unknown values must be absent or explicitly unavailable, never silently zero.
 
 The following answers establish the initial performance targets:
 
-1. What types of authorized RF activity must v1 observe first?
-2. What frequency range matters for the first field trial?
-3. Is the first unit stationary, vehicle-mounted, portable, or all three?
+1. Which Remote ID message formats and receiver hardware will v1 support first?
+2. What frequency range matters beyond Remote ID for the first field trial?
+3. Is the first unit stationary at the home site, portable, or both?
 4. How long must it operate per session and, if portable, on battery?
 5. What is the maximum acceptable time from activity to operator notification?
 6. Approximately how many simultaneous contacts should it handle?
@@ -215,4 +244,5 @@ The following answers establish the initial performance targets:
    for the first version?
 8. Must v1 operate without GPS or network time?
 9. What display resolution and input method will the first field unit use?
-10. Which outcome defines a successful first field demonstration?
+10. What detection range and position/heading error define a successful
+    cooperative-drone field demonstration?

@@ -47,6 +47,8 @@ as a real sensor result.
 
 ## Planned modules
 
+- Versioned sensor-event and contact data contract
+- Remote ID receiver and trajectory source
 - SDR spectrum source
 - Spectrum and waterfall history buffer
 - Direction-finding source
