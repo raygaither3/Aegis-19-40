@@ -2,10 +2,11 @@
 
 ## Product target
 
-Version 1 runs on a Raspberry Pi 4 as an offline RF situational-awareness
-system. SDR and other hardware inputs will be added behind stable software
-interfaces after the detection, tracking, and operator workflows are proven
-with deterministic simulation.
+Version 1 is a platform-independent, offline-capable RF situational-awareness
+system. Raspberry Pi 4 is the first development and edge deployment target,
+not an architectural ceiling. SDR and other hardware inputs will be added
+behind stable software interfaces after the detection, tracking, and operator
+workflows are proven with deterministic simulation.
 
 ## Layers
 
@@ -18,9 +19,19 @@ with deterministic simulation.
 The GUI currently consumes simulator snapshots. A future SDR source must feed
 the same processing boundary so the dashboard does not require a redesign.
 
-## Raspberry Pi 4 constraints
+## Deployment profiles
 
-- Native Tk interface; no browser runtime required
+- **Edge Lite:** Raspberry Pi-class Scout and Relay deployments
+- **Edge Performance:** Higher-performance Tracker and Sentinel deployments
+- **Air Node:** Size, weight, power, and thermal constrained deployment
+- **Command:** Workstation-class aggregation, analysis, and storage
+
+All profiles use the same versioned event, contact, and recording contracts.
+Hardware acceleration and device access remain optional adapters.
+
+## Edge constraints
+
+- Lightweight native interface; no browser runtime required for core operation
 - Canvas rendering without mandatory GPU acceleration
 - Dashboard redraws on scan updates rather than continuously
 - No network dependency for core operation
