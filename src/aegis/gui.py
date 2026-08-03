@@ -1,44 +1,15 @@
 import math
+from datetime import datetime
+from pathlib import Path
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, messagebox, ttk
 
-from src.aegis.scenario_simulator import (
-    ContactSnapshot,
-    ScanResult,
-    build_demo_scenario,
-    run_scenario,
+from src.aegis.mission import (
+    MissionController,
+    MissionFrame,
+    MissionMode,
 )
-
-
-class ScenarioController:
-    """Provide sequential simulator data to the dashboard."""
-
-    def __init__(self) -> None:
-        self._results = run_scenario(build_demo_scenario())
-        self._index = -1
-
-    @property
-    def current(self) -> ScanResult | None:
-        if self._index < 0:
-            return None
-        return self._results[self._index]
-
-    @property
-    def has_next(self) -> bool:
-        return self._index + 1 < len(self._results)
-
-    @property
-    def total_scans(self) -> int:
-        return len(self._results)
-
-    def next_scan(self) -> ScanResult | None:
-        if not self.has_next:
-            return None
-        self._index += 1
-        return self.current
-
-    def reset(self) -> None:
-        self._index = -1
+from src.aegis.scenario_simulator import ContactSnapshot
 
 
 class AegisApp:
@@ -56,7 +27,7 @@ class AegisApp:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.controller = ScenarioController()
+        self.controller = MissionController()
         self._auto_job: str | None = None
         self._auto_running = False
         self._contacts_by_row: dict[str, ContactSnapshot] = {}
@@ -162,13 +133,14 @@ class AegisApp:
         ttk.Label(title_group, text="AEGIS", style="Title.TLabel").pack(
             side="left"
         )
-        tk.Label(
+        self.unit_label = tk.Label(
             title_group,
-            text="  UNIT 01 / SIMULATION",
+            text="  UNIT 01 / READY",
             bg=self.BG,
             fg=self.MUTED,
             font=("Consolas", 10),
-        ).pack(side="left", pady=(7, 0))
+        )
+        self.unit_label.pack(side="left", pady=(7, 0))
 
         controls = ttk.Frame(header, style="Bg.TFrame")
         controls.pack(side="right")
@@ -182,20 +154,38 @@ class AegisApp:
         self.mode_label.pack(side="left", padx=(0, 18))
         ttk.Button(
             controls,
-            text="RESET",
+            text="START SIM",
             style="Aegis.TButton",
-            command=self.reset,
+            command=self.start_simulation,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
+            text="RECORD",
+            style="Aegis.TButton",
+            command=self.start_recording,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
+            text="OPEN",
+            style="Aegis.TButton",
+            command=self.open_recording,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
+            text="STOP",
+            style="Aegis.TButton",
+            command=self.stop_mission,
         ).pack(side="left", padx=(0, 6))
         self.auto_button = ttk.Button(
             controls,
-            text="AUTO PLAY",
+            text="PLAY",
             style="Aegis.TButton",
             command=self.toggle_auto,
         )
         self.auto_button.pack(side="left", padx=(0, 6))
         self.next_button = ttk.Button(
             controls,
-            text="NEXT SCAN",
+            text="NEXT",
             style="Accent.TButton",
             command=self.next_scan,
         )
@@ -212,7 +202,7 @@ class AegisApp:
             ("RF Activity", "0 ACTIVE", self.AMBER),
             ("Alerts", "0 NEW", self.RED),
             ("GPS", "SIMULATED", self.GREEN),
-            ("Scan", "0 / 5", self.TEXT),
+            ("Scan", "0 / 0", self.TEXT),
         ):
             row = tk.Frame(column, bg=self.PANEL)
             row.pack(fill="x", pady=5)
@@ -339,7 +329,8 @@ class AegisApp:
         self.detail_fields: dict[str, tk.Label] = {}
         for name in (
             "Center Frequency", "Bandwidth", "Peak Power",
-            "Detections", "Missed Scans", "Classification",
+            "Detections", "Missed Scans", "Aircraft ID",
+            "Distance", "Bearing", "Heading", "Altitude",
         ):
             row = tk.Frame(detail, bg=self.PANEL)
             row.pack(fill="x", pady=4)
@@ -355,7 +346,7 @@ class AegisApp:
             self.detail_fields[name] = value
         self.classification_note = tk.Label(
             detail,
-            text="Classification engine not yet connected",
+            text="Remote ID trajectory is simulated and not a live observation",
             bg=self.PANEL,
             fg=self.MUTED,
             font=("Segoe UI", 8, "italic"),
@@ -390,12 +381,12 @@ class AegisApp:
         tk.Frame(parent, height=1, bg=self.BORDER).pack(fill="x", pady=12)
 
     def next_scan(self) -> None:
-        result = self.controller.next_scan()
-        if result is None:
+        frame = self.controller.next_frame()
+        if frame is None:
             self._stop_auto()
-            self.footer_status.configure(text="SCENARIO COMPLETE", fg=self.AMBER)
+            self.footer_status.configure(text="MISSION COMPLETE", fg=self.AMBER)
             return
-        self._render(result)
+        self._render(frame)
         if not self.controller.has_next:
             self.next_button.configure(state="disabled")
             self._stop_auto()
@@ -406,12 +397,67 @@ class AegisApp:
         self.next_button.configure(state="normal")
         self._show_ready_state()
 
+    def start_simulation(self) -> None:
+        self._stop_auto()
+        self.controller.start_simulation()
+        self.next_button.configure(state="normal")
+        self._show_ready_state()
+        self._set_mode(MissionMode.SIMULATED)
+
+    def start_recording(self) -> None:
+        parent = filedialog.askdirectory(
+            title="Choose where to save the Aegis recording"
+        )
+        if not parent:
+            return
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        recording_path = Path(parent) / f"aegis-mission-{timestamp}"
+        try:
+            self.controller.start_simulation(recording_path)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Recording Error", str(error))
+            return
+        self.next_button.configure(state="normal")
+        self._show_ready_state()
+        self._set_mode(MissionMode.RECORDING)
+        self.footer_status.configure(
+            text=f"RECORDING TO {recording_path.name}", fg=self.RED
+        )
+
+    def open_recording(self) -> None:
+        directory = filedialog.askdirectory(
+            title="Open an Aegis recording directory"
+        )
+        if not directory:
+            return
+        try:
+            self.controller.open_recording(directory)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Playback Error", str(error))
+            return
+        self.next_button.configure(state="normal")
+        self._show_ready_state()
+        self._set_mode(MissionMode.REPLAY)
+        if self.controller.issues:
+            messagebox.showwarning(
+                "Recording Recovered",
+                f"Loaded with {len(self.controller.issues)} reported issue(s).",
+            )
+
+    def stop_mission(self) -> None:
+        self._stop_auto()
+        self.controller.stop()
+        self.next_button.configure(state="disabled")
+        self.footer_status.configure(text="MISSION STOPPED", fg=self.AMBER)
+
     def toggle_auto(self) -> None:
         if self._auto_running:
             self._stop_auto()
             return
+        if self.controller.mode is MissionMode.READY:
+            self.start_simulation()
         if not self.controller.has_next:
-            self.reset()
+            return
         self._auto_running = True
         self.auto_button.configure(text="PAUSE")
         self._auto_step()
@@ -425,24 +471,27 @@ class AegisApp:
 
     def _stop_auto(self) -> None:
         self._auto_running = False
-        self.auto_button.configure(text="AUTO PLAY")
+        self.auto_button.configure(text="PLAY")
         if self._auto_job is not None:
             self.root.after_cancel(self._auto_job)
             self._auto_job = None
 
     def _show_ready_state(self) -> None:
+        self._set_mode(self.controller.mode)
         self.status_values["RF Activity"].configure(text="0 ACTIVE")
         self.status_values["Alerts"].configure(text="0 NEW")
         self.status_values["Scan"].configure(
-            text=f"0 / {self.controller.total_scans}"
+            text=f"0 / {self.controller.total_frames}"
         )
-        self.footer_status.configure(text="SIMULATOR READY", fg=self.GREEN)
+        if self.controller.mode is MissionMode.READY:
+            self.footer_status.configure(text="MISSION READY", fg=self.GREEN)
         self._clear_contacts()
         self._clear_details()
         self._draw_map()
         self._draw_signal()
 
-    def _render(self, result: ScanResult) -> None:
+    def _render(self, frame: MissionFrame) -> None:
+        result = frame.scan_result
         confirmed = sum(c.state.value == "confirmed" for c in result.contacts)
         fading = sum(c.state.value == "fading" for c in result.contacts)
         self.status_values["RF Activity"].configure(
@@ -452,10 +501,14 @@ class AegisApp:
             text=f"{fading} NEW", fg=self.RED if fading else self.GREEN
         )
         self.status_values["Scan"].configure(
-            text=f"{result.scan_number} / {self.controller.total_scans}"
+            text=f"{result.scan_number} / {self.controller.total_frames}"
         )
+        self._set_mode(frame.mode)
         self.footer_status.configure(
-            text=f"SCAN {result.scan_number}  |  {confirmed} CONFIRMED",
+            text=(
+                f"{frame.mode.value.upper()}  |  SCAN {result.scan_number}  |  "
+                f"{confirmed} CONFIRMED"
+            ),
             fg=self.CYAN,
         )
         self._clear_contacts()
@@ -478,8 +531,21 @@ class AegisApp:
             self.contact_table.selection_set(rows[0])
             self.contact_table.focus(rows[0])
             self._show_contact(self._contacts_by_row[rows[0]])
+        self._show_trajectory(frame)
         self._draw_map()
         self._draw_signal()
+
+    def _set_mode(self, mode: MissionMode) -> None:
+        colors = {
+            MissionMode.READY: self.MUTED,
+            MissionMode.SIMULATED: self.AMBER,
+            MissionMode.RECORDING: self.RED,
+            MissionMode.REPLAY: self.PURPLE,
+        }
+        label = mode.value.upper()
+        self.unit_label.configure(text=f"  UNIT 01 / {label}")
+        self.mode_label.configure(text=f"MODE: {label}", fg=colors[mode])
+        self.status_values["Input Source"].configure(text=label)
 
     def _clear_contacts(self) -> None:
         self._contacts_by_row.clear()
@@ -510,7 +576,6 @@ class AegisApp:
             "Peak Power": f"{contact.peak_power_db:.1f} dB",
             "Detections": str(contact.detection_count),
             "Missed Scans": str(contact.missed_scans),
-            "Classification": "UNKNOWN",
         }
         for name, value in values.items():
             self.detail_fields[name].configure(text=value)
@@ -521,6 +586,36 @@ class AegisApp:
             0, 0, width * contact.confidence / 100, 12,
             fill=color, outline="",
         )
+
+    def _show_trajectory(self, frame: MissionFrame) -> None:
+        altitude = (
+            frame.aircraft_position.altitude_m
+            if frame.aircraft_position is not None
+            else None
+        )
+        values = {
+            "Aircraft ID": frame.aircraft_id or "UNAVAILABLE",
+            "Distance": (
+                f"{frame.distance_m:.1f} m"
+                if frame.distance_m is not None
+                else "UNAVAILABLE"
+            ),
+            "Bearing": (
+                f"{frame.bearing_degrees:.1f} deg"
+                if frame.bearing_degrees is not None
+                else "UNAVAILABLE"
+            ),
+            "Heading": (
+                f"{frame.heading_degrees:.1f} deg"
+                if frame.heading_degrees is not None
+                else "UNAVAILABLE"
+            ),
+            "Altitude": (
+                f"{altitude:.1f} m" if altitude is not None else "UNAVAILABLE"
+            ),
+        }
+        for name, value in values.items():
+            self.detail_fields[name].configure(text=value)
 
     def _clear_details(self) -> None:
         self.detail_title.configure(text="NO CONTACT SELECTED", fg=self.MUTED)
@@ -552,29 +647,43 @@ class AegisApp:
                            fill=self.CYAN, outline="#b8efff")
         canvas.create_text(cx, cy + 20, text="AEGIS", fill=self.CYAN,
                            font=("Consolas", 8, "bold"))
-        result = self.controller.current
-        if result is None:
+        frame = self.controller.current
+        if frame is None:
             canvas.create_text(
-                cx, 24, text="AWAITING SIMULATED RF CONTACTS",
+                cx, 24, text="AWAITING MISSION EVENTS",
                 fill=self.MUTED, font=("Consolas", 9),
             )
             return
-        colors = {"confirmed": self.GREEN, "tentative": self.AMBER,
-                  "fading": self.RED}
-        for contact in result.contacts:
-            angle = math.radians((contact.signal_id * 97 + result.scan_number * 4) % 360)
-            radius = 60 + contact.signal_id * 25
+        result = frame.scan_result
+        if frame.bearing_degrees is not None and frame.distance_m is not None:
+            angle = math.radians(frame.bearing_degrees - 90.0)
+            radius = min(140.0, 35.0 + frame.distance_m * 0.32)
             x = cx + math.cos(angle) * radius
             y = cy + math.sin(angle) * radius
-            color = colors[contact.state.value]
+            color = self.GREEN
             canvas.create_line(cx, cy, x, y, fill=color, dash=(4, 4))
-            canvas.create_oval(x - 7, y - 7, x + 7, y + 7,
-                               outline=color, width=2)
+            canvas.create_oval(
+                x - 8, y - 8, x + 8, y + 8, outline=color, width=2
+            )
             canvas.create_text(
-                x + 11, y - 10, text=f"#{contact.signal_id}  {contact.confidence:.0f}%",
+                x + 11,
+                y - 10,
+                text=(
+                    f"{frame.aircraft_id}  {frame.distance_m:.0f} m  "
+                    f"{frame.bearing_degrees:.0f} deg"
+                ),
                 fill=color, anchor="w", font=("Consolas", 8, "bold"),
             )
-        canvas.create_text(8, 8, text="SIMULATED BEARINGS - NOT GPS",
+        confidence = result.contacts[0].confidence if result.contacts else 0.0
+        canvas.create_text(
+            8,
+            height - 8,
+            text=f"RF CONTACT CONFIDENCE: {confidence:.0f}%",
+            fill=self.AMBER,
+            anchor="sw",
+            font=("Consolas", 7),
+        )
+        canvas.create_text(8, 8, text="FICTIONAL REMOTE ID TRAJECTORY",
                            fill=self.MUTED, anchor="nw", font=("Consolas", 7))
 
     def _draw_signal(self) -> None:
@@ -587,7 +696,11 @@ class AegisApp:
             canvas.create_line(x, 0, x, split, fill="#13303a")
         for y in range(0, split, 30):
             canvas.create_line(0, y, width, y, fill="#13303a")
-        scan = self.controller.current.scan_number if self.controller.current else 0
+        scan = (
+            self.controller.current.scan_result.scan_number
+            if self.controller.current
+            else 0
+        )
         points: list[float] = []
         for x in range(width):
             base = split * 0.72
@@ -599,9 +712,9 @@ class AegisApp:
                     spike += (1 - distance / 0.018) * 42
             points.extend((x, base - wave - spike))
         canvas.create_line(*points, fill="#2bd4a7", width=1)
-        canvas.create_text(6, 5, text="100.0 MHz", fill=self.MUTED,
+        canvas.create_text(6, 5, text="2.400 GHz", fill=self.MUTED,
                            anchor="nw", font=("Consolas", 7))
-        canvas.create_text(width - 6, 5, text="101.0 MHz", fill=self.MUTED,
+        canvas.create_text(width - 6, 5, text="2.500 GHz", fill=self.MUTED,
                            anchor="ne", font=("Consolas", 7))
         waterfall_top = split + 8
         palette = ("#071b27", "#0b3442", "#126b70", "#24a887", "#d5b447")

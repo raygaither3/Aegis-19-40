@@ -28,7 +28,13 @@ From the repository root:
 python -m src.aegis.gui
 ```
 
-Use **Next Scan** to step through the scenario or **Auto Play** to run all scans.
+Use **Start Sim** to load the fictional drone mission, then **Next** or **Play**
+to advance it. **Record** saves the mission as structured event segments.
+**Open** loads a recording for deterministic replay, and **Stop** closes an
+active recording cleanly.
+
+The included trajectory uses fictional coordinates. Distance, bearing, heading,
+Remote ID, RF activity, spectrum, and waterfall content remain simulated.
 
 ## Run the tests
 
