@@ -15,6 +15,8 @@ tracking, and assessing RF contacts. Version 1 is targeted for Raspberry Pi 4.
 - Reacquire temporarily missing contacts
 - Run deterministic multi-scan scenarios without an SDR
 - Display a lightweight native situational-awareness dashboard
+- Receive live 1090 MHz ADS-B aircraft through an RTL-enabled `readsb`
+- Plot measured aircraft positions over cached OpenStreetMap tiles
 
 All bearings, locations, spectrum traces, and waterfall data in the current GUI
 are simulated. The interface labels unavailable sensors as standby and does not
@@ -35,6 +37,21 @@ active recording cleanly.
 
 The included trajectory uses fictional coordinates. Distance, bearing, heading,
 Remote ID, RF activity, spectrum, and waterfall content remain simulated.
+
+## Run live ADS-B on Raspberry Pi
+
+Build `readsb` with RTL-SDR support in `~/readsb-rtl`, then launch Aegis and
+select **Live ADS-B**. Aegis starts the receiver locally, reads its JSON output
+once per second, and stops it when the session or application closes.
+
+```bash
+cd ~/Aegis-19-40
+python3 -m src.aegis.gui
+```
+
+Close Gqrx, `rtl_adsb`, and other SDR programs first. The online basemap uses
+OpenStreetMap tiles and caches downloaded tiles under
+`~/.cache/aegis/map_tiles`; receiver data is not uploaded by Aegis.
 
 ## Run the tests
 

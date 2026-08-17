@@ -4,12 +4,14 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from src.aegis.adsb_source import AdsbAircraft, ReadsbSource
 from src.aegis.mission import (
     MissionController,
     MissionFrame,
     MissionMode,
 )
 from src.aegis.scenario_simulator import ContactSnapshot
+from src.aegis.online_map import OnlineMap
 
 
 class AegisApp:
@@ -31,11 +33,18 @@ class AegisApp:
         self._auto_job: str | None = None
         self._auto_running = False
         self._contacts_by_row: dict[str, ContactSnapshot] = {}
+        self._aircraft_by_row: dict[str, AdsbAircraft] = {}
+        self._adsb_source = ReadsbSource()
+        self._adsb_aircraft: tuple[AdsbAircraft, ...] = ()
+        self._adsb_job: str | None = None
+        self._adsb_live = False
+        self._map_center: tuple[float, float] | None = None
 
         root.title("Project Aegis - Situational Awareness")
         root.geometry("1400x820")
         root.minsize(1100, 680)
         root.configure(bg=self.BG)
+        root.protocol("WM_DELETE_WINDOW", self._close)
 
         self._configure_styles()
         self._build_dashboard()
@@ -154,6 +163,12 @@ class AegisApp:
         self.mode_label.pack(side="left", padx=(0, 18))
         ttk.Button(
             controls,
+            text="LIVE ADS-B",
+            style="Accent.TButton",
+            command=self.start_adsb,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls,
             text="START SIM",
             style="Aegis.TButton",
             command=self.start_simulation,
@@ -267,6 +282,8 @@ class AegisApp:
         )
         self.map_canvas.pack(fill="both", expand=True, pady=(7, 0))
         self.map_canvas.bind("<Configure>", lambda _: self._draw_map())
+        self.online_map = OnlineMap(self.root, self.map_canvas)
+        self.online_map.redraw = self._draw_map
 
         contacts = ttk.Frame(column, style="Panel.TFrame", padding=10)
         contacts.grid(row=1, column=0, sticky="nsew")
@@ -398,6 +415,7 @@ class AegisApp:
         self._show_ready_state()
 
     def start_simulation(self) -> None:
+        self._stop_adsb()
         self._stop_auto()
         self.controller.start_simulation()
         self.next_button.configure(state="normal")
@@ -446,9 +464,97 @@ class AegisApp:
 
     def stop_mission(self) -> None:
         self._stop_auto()
+        self._stop_adsb()
         self.controller.stop()
         self.next_button.configure(state="disabled")
         self.footer_status.configure(text="MISSION STOPPED", fg=self.AMBER)
+
+    def start_adsb(self) -> None:
+        """Start a local, measured ADS-B session using RTL-enabled readsb."""
+
+        self._stop_auto()
+        self.controller.stop()
+        try:
+            self._adsb_source.start()
+        except (FileNotFoundError, OSError, RuntimeError) as error:
+            messagebox.showerror(
+                "Live ADS-B Error",
+                f"Aegis could not start readsb.\n\n{error}\n\n"
+                "Close Gqrx and rtl_adsb, and stop any readsb service.",
+            )
+            return
+        self._adsb_live = True
+        self._adsb_aircraft = ()
+        self._map_center = None
+        self.next_button.configure(state="disabled")
+        self.unit_label.configure(text="  UNIT 01 / LIVE ADS-B")
+        self.mode_label.configure(text="MODE: MEASURED", fg=self.GREEN)
+        self.status_values["Input Source"].configure(text="RTL-SDR / 1090")
+        self.status_values["GPS"].configure(text="ADS-B POSITIONS")
+        self.footer_status.configure(text="ACQUIRING 1090 MHz ADS-B", fg=self.GREEN)
+        self.classification_note.configure(
+            text="Aircraft positions are measured ADS-B broadcasts",
+            fg=self.GREEN,
+        )
+        self._poll_adsb()
+
+    def _poll_adsb(self) -> None:
+        if not self._adsb_live:
+            return
+        try:
+            self._adsb_aircraft = self._adsb_source.read()
+        except RuntimeError as error:
+            self._stop_adsb()
+            messagebox.showerror("Live ADS-B Error", str(error))
+            return
+        positioned = tuple(a for a in self._adsb_aircraft if a.has_position)
+        if positioned:
+            self._map_center = (
+                sum(a.latitude for a in positioned) / len(positioned),
+                sum(a.longitude for a in positioned) / len(positioned),
+            )
+        self.status_values["RF Activity"].configure(
+            text=f"{len(self._adsb_aircraft)} AIRCRAFT"
+        )
+        self.status_values["Scan"].configure(text="LIVE / 1 SEC")
+        self.footer_status.configure(
+            text=f"LIVE ADS-B  |  {len(self._adsb_aircraft)} SEEN  |  "
+                 f"{len(positioned)} POSITIONED",
+            fg=self.GREEN,
+        )
+        self._render_aircraft_table()
+        self._draw_map()
+        self._adsb_job = self.root.after(1000, self._poll_adsb)
+
+    def _render_aircraft_table(self) -> None:
+        self._clear_contacts()
+        for key, title in (("id", "ICAO / FLIGHT"), ("frequency", "ALTITUDE"),
+                           ("confidence", "SPEED"), ("state", "TRACK"),
+                           ("seen", "MSGS"), ("missed", "SEEN")):
+            self.contact_table.heading(key, text=title)
+        for aircraft in self._adsb_aircraft:
+            row = self.contact_table.insert(
+                "", "end",
+                values=(
+                    aircraft.flight or aircraft.icao,
+                    f"{aircraft.altitude_ft:,} ft" if aircraft.altitude_ft is not None else "--",
+                    f"{aircraft.speed_knots:.0f} kt" if aircraft.speed_knots is not None else "--",
+                    f"{aircraft.track_degrees:.0f}°" if aircraft.track_degrees is not None else "--",
+                    aircraft.messages,
+                    f"{aircraft.seen_seconds:.1f}s",
+                ),
+                tags=("confirmed" if aircraft.has_position else "tentative",),
+            )
+            self._aircraft_by_row[row] = aircraft
+
+    def _stop_adsb(self) -> None:
+        if self._adsb_job is not None:
+            self.root.after_cancel(self._adsb_job)
+            self._adsb_job = None
+        self._adsb_live = False
+        self._adsb_source.stop()
+        self._adsb_aircraft = ()
+        self._aircraft_by_row.clear()
 
     def toggle_auto(self) -> None:
         if self._auto_running:
@@ -491,6 +597,10 @@ class AegisApp:
         self._draw_signal()
 
     def _render(self, frame: MissionFrame) -> None:
+        for key, title in (("id", "ID"), ("frequency", "FREQUENCY"),
+                           ("confidence", "CONFIDENCE"), ("state", "STATE"),
+                           ("seen", "SEEN"), ("missed", "MISSED")):
+            self.contact_table.heading(key, text=title)
         result = frame.scan_result
         confirmed = sum(c.state.value == "confirmed" for c in result.contacts)
         fading = sum(c.state.value == "fading" for c in result.contacts)
@@ -549,6 +659,7 @@ class AegisApp:
 
     def _clear_contacts(self) -> None:
         self._contacts_by_row.clear()
+        self._aircraft_by_row.clear()
         for row in self.contact_table.get_children():
             self.contact_table.delete(row)
 
@@ -556,6 +667,26 @@ class AegisApp:
         selected = self.contact_table.selection()
         if selected and selected[0] in self._contacts_by_row:
             self._show_contact(self._contacts_by_row[selected[0]])
+        elif selected and selected[0] in self._aircraft_by_row:
+            self._show_aircraft(self._aircraft_by_row[selected[0]])
+
+    def _show_aircraft(self, aircraft: AdsbAircraft) -> None:
+        self.detail_title.configure(text=aircraft.flight or aircraft.icao, fg=self.GREEN)
+        self.detail_state.configure(text=f"MEASURED ADS-B  |  ICAO {aircraft.icao}")
+        values = {
+            "Center Frequency": "1090.000 MHz",
+            "Bandwidth": "MODE S / ADS-B",
+            "Peak Power": "UNAVAILABLE",
+            "Detections": str(aircraft.messages),
+            "Missed Scans": f"SEEN {aircraft.seen_seconds:.1f}s AGO",
+            "Aircraft ID": aircraft.flight or aircraft.icao,
+            "Distance": "UNAVAILABLE",
+            "Bearing": "UNAVAILABLE",
+            "Heading": f"{aircraft.track_degrees:.1f}°" if aircraft.track_degrees is not None else "UNAVAILABLE",
+            "Altitude": f"{aircraft.altitude_ft:,} ft" if aircraft.altitude_ft is not None else "UNAVAILABLE",
+        }
+        for name, value in values.items():
+            self.detail_fields[name].configure(text=value)
 
     def _show_contact(self, contact: ContactSnapshot) -> None:
         colors = {
@@ -628,6 +759,9 @@ class AegisApp:
 
     def _draw_map(self) -> None:
         canvas = self.map_canvas
+        if self._adsb_live:
+            self._draw_adsb_map()
+            return
         canvas.delete("all")
         width = max(canvas.winfo_width(), 320)
         height = max(canvas.winfo_height(), 230)
@@ -685,6 +819,51 @@ class AegisApp:
         )
         canvas.create_text(8, 8, text="FICTIONAL REMOTE ID TRAJECTORY",
                            fill=self.MUTED, anchor="nw", font=("Consolas", 7))
+
+    def _draw_adsb_map(self) -> None:
+        canvas = self.map_canvas
+        positioned = tuple(a for a in self._adsb_aircraft if a.has_position)
+        if self._map_center is None:
+            canvas.delete("all")
+            canvas.create_text(
+                max(canvas.winfo_width(), 320) / 2,
+                max(canvas.winfo_height(), 230) / 2,
+                text="WAITING FOR ADS-B POSITION MESSAGES",
+                fill=self.MUTED,
+                font=("Consolas", 9),
+            )
+            return
+        center_lat, center_lon = self._map_center
+        zoom = 10
+        self.online_map.draw(center_lat, center_lon, zoom)
+        width = max(canvas.winfo_width(), 320)
+        height = max(canvas.winfo_height(), 230)
+        for aircraft in positioned:
+            x, y = self.online_map.project(
+                aircraft.latitude, aircraft.longitude, center_lat, center_lon, zoom
+            )
+            if not (-15 <= x <= width + 15 and -15 <= y <= height + 15):
+                continue
+            heading = math.radians((aircraft.track_degrees or 0) - 90)
+            points = []
+            for radius, offset in ((10, 0), (7, 2.45), (7, -2.45)):
+                points.extend((x + math.cos(heading + offset) * radius,
+                               y + math.sin(heading + offset) * radius))
+            canvas.create_polygon(*points, fill=self.GREEN, outline="#071018")
+            canvas.create_text(
+                x + 12, y - 7,
+                text=aircraft.flight or aircraft.icao,
+                fill="#071018", anchor="w", font=("Consolas", 8, "bold"),
+            )
+        canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / 1090 MHz",
+                           fill="#071018", anchor="nw",
+                           font=("Consolas", 8, "bold"))
+
+    def _close(self) -> None:
+        self._stop_auto()
+        self._stop_adsb()
+        self.online_map.close()
+        self.root.destroy()
 
     def _draw_signal(self) -> None:
         canvas = self.signal_canvas

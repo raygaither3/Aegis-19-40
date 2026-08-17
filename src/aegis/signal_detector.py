@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -154,6 +153,8 @@ def display_results(
     threshold_db: float,
     detections: list[DetectedSignal],
 ) -> None:
+    import matplotlib.pyplot as plt
+
     frequencies_mhz = frequencies_hz / 1_000_000
 
     plt.figure(figsize=(12, 6))
