@@ -821,6 +821,8 @@ class AegisApp:
         if self._adsb_live:
             self._draw_adsb_map()
             return
+        width = max(canvas.winfo_width(), 320)
+        height = max(canvas.winfo_height(), 230)
         own_lat = self._gps_fix.latitude if self._gps_fix else SIMULATED_OBSERVER.latitude_degrees
         own_lon = self._gps_fix.longitude if self._gps_fix else SIMULATED_OBSERVER.longitude_degrees
         frame = self.controller.current
@@ -838,8 +840,8 @@ class AegisApp:
         if frame is None:
             canvas.create_text(
                 8, 8,
-                text="LIVE GPS / OPENSTREETMAP" if self._gps_fix else "OPENSTREETMAP / SIMULATED LOCATION",
-                fill="#071018", anchor="nw", font=("Consolas", 8, "bold"),
+                text="LIVE GPS / USGS IMAGERY" if self._gps_fix else "USGS IMAGERY / SIMULATED LOCATION",
+                fill="#ffffff", anchor="nw", font=("Consolas", 8, "bold"),
             )
             return
         result = frame.scan_result
@@ -872,8 +874,8 @@ class AegisApp:
             anchor="sw",
             font=("Consolas", 7),
         )
-        canvas.create_text(8, 8, text="OPENSTREETMAP / FICTIONAL REMOTE ID",
-                           fill="#071018", anchor="nw", font=("Consolas", 7, "bold"))
+        canvas.create_text(8, 8, text="USGS IMAGERY / FICTIONAL REMOTE ID",
+                           fill="#ffffff", anchor="nw", font=("Consolas", 7, "bold"))
 
     def _draw_adsb_map(self) -> None:
         canvas = self.map_canvas
@@ -902,19 +904,17 @@ class AegisApp:
             )
             if not (-15 <= x <= width + 15 and -15 <= y <= height + 15):
                 continue
-            heading = math.radians((aircraft.track_degrees or 0) - 90)
-            points = []
-            for radius, offset in ((10, 0), (7, 2.45), (7, -2.45)):
-                points.extend((x + math.cos(heading + offset) * radius,
-                               y + math.sin(heading + offset) * radius))
-            canvas.create_polygon(*points, fill=self.GREEN, outline="#071018")
             canvas.create_text(
-                x + 12, y - 7,
-                text=aircraft.flight or aircraft.icao,
-                fill="#071018", anchor="w", font=("Consolas", 8, "bold"),
+                x, y, text="✈", fill=self.GREEN,
+                font=("DejaVu Sans", 18, "bold"),
             )
-        canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / 1090 MHz",
-                           fill="#071018", anchor="nw",
+            canvas.create_text(
+                x + 14, y - 9,
+                text=aircraft.flight or aircraft.icao,
+                fill="#ffffff", anchor="w", font=("Consolas", 8, "bold"),
+            )
+        canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / USGS IMAGERY",
+                           fill="#ffffff", anchor="nw",
                            font=("Consolas", 8, "bold"))
         if self._gps_fix:
             x, y = self.online_map.project(

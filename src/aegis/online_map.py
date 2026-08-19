@@ -1,4 +1,4 @@
-"""Small OpenStreetMap tile renderer for Aegis's Tk canvas."""
+"""Small USGS aerial-imagery tile renderer for Aegis's Tk canvas."""
 
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -10,6 +10,10 @@ from PIL import Image, ImageTk
 
 
 TILE_SIZE = 256
+TILE_URL = (
+    "https://basemap.nationalmap.gov/arcgis/rest/services/"
+    "USGSImageryOnly/MapServer/tile/{zoom}/{y}/{x}"
+)
 
 
 def geo_to_world(latitude: float, longitude: float, zoom: int) -> tuple[float, float]:
@@ -25,7 +29,7 @@ class OnlineMap:
     def __init__(self, root, canvas) -> None:
         self.root = root
         self.canvas = canvas
-        self.cache = Path.home() / ".cache" / "aegis" / "map_tiles"
+        self.cache = Path.home() / ".cache" / "aegis" / "usgs_imagery_tiles"
         self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="map-tile")
         self.pending: set[tuple[int, int, int]] = set()
         self.ready: dict[tuple[int, int, int], bytes | None] = {}
@@ -59,9 +63,11 @@ class OnlineMap:
                     canvas.create_rectangle(x, y, x + TILE_SIZE, y + TILE_SIZE,
                                             fill="#102128", outline="#28404d")
                     self._request(key)
+        canvas.create_rectangle(width - 165, height - 20, width, height,
+                                fill="#071018", outline="")
         canvas.create_text(width - 6, height - 5,
-                           text="© OpenStreetMap contributors",
-                           fill="#dce8ed", anchor="se", font=("Sans", 7))
+                           text="Imagery: U.S. Geological Survey",
+                           fill="#ffffff", anchor="se", font=("Sans", 7))
         if self.pending and self.redraw is not None and self._redraw_job is None:
             self._redraw_job = self.root.after(150, self._refresh)
 
@@ -92,8 +98,8 @@ class OnlineMap:
             if path.exists():
                 return path.read_bytes()
             request = urllib.request.Request(
-                f"https://tile.openstreetmap.org/{zoom}/{x}/{y}.png",
-                headers={"User-Agent": "Project-Aegis/0.4 local ADS-B display"},
+                TILE_URL.format(zoom=zoom, x=x, y=y),
+                headers={"User-Agent": "Project-Aegis/0.5 local situational display"},
             )
             with urllib.request.urlopen(request, timeout=8) as response:
                 data = response.read()
