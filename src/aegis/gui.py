@@ -45,6 +45,9 @@ class AegisApp:
         self._gps_fix: GpsFix | None = None
         self._gps_job: str | None = None
         self._gps_live = False
+        # Zoom 9 provides approximately a 20-mile-radius home view at the
+        # dashboard's normal Raspberry Pi display size and mid-US latitudes.
+        self._map_zoom = 9
 
         root.title("Project Aegis - Situational Awareness")
         root.geometry("1400x820")
@@ -287,13 +290,37 @@ class AegisApp:
 
         situational = ttk.Frame(column, style="Panel.TFrame", padding=10)
         situational.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
-        self._section_title(situational, "LIVE SITUATIONAL DISPLAY")
+        map_header = ttk.Frame(situational, style="Panel.TFrame")
+        map_header.pack(fill="x")
+        ttk.Label(
+            map_header, text="LIVE SITUATIONAL DISPLAY", style="Section.TLabel"
+        ).pack(side="left")
+        ttk.Button(
+            map_header, text="−", width=3, style="Aegis.TButton",
+            command=lambda: self._change_map_zoom(-1),
+        ).pack(side="right", padx=(4, 0))
+        ttk.Button(
+            map_header, text="+", width=3, style="Aegis.TButton",
+            command=lambda: self._change_map_zoom(1),
+        ).pack(side="right")
+        self.map_zoom_label = tk.Label(
+            map_header, text=f"ZOOM {self._map_zoom}", bg=self.PANEL,
+            fg=self.MUTED, font=("Consolas", 8),
+        )
+        self.map_zoom_label.pack(side="right", padx=(0, 7))
+        ttk.Button(
+            map_header, text="20 MI", width=6, style="Aegis.TButton",
+            command=self._reset_map_zoom,
+        ).pack(side="right", padx=(0, 7))
         self.map_canvas = tk.Canvas(
             situational, bg="#09151a", highlightthickness=1,
             highlightbackground=self.BORDER,
         )
         self.map_canvas.pack(fill="both", expand=True, pady=(7, 0))
         self.map_canvas.bind("<Configure>", lambda _: self._draw_map())
+        self.map_canvas.bind("<MouseWheel>", self._on_map_wheel)
+        self.map_canvas.bind("<Button-4>", lambda _: self._change_map_zoom(1))
+        self.map_canvas.bind("<Button-5>", lambda _: self._change_map_zoom(-1))
         self.online_map = OnlineMap(self.root, self.map_canvas)
         self.online_map.redraw = self._draw_map
 
@@ -830,7 +857,7 @@ class AegisApp:
         if frame is not None and frame.aircraft_position is not None and not self._gps_fix:
             center_lat = (own_lat + frame.aircraft_position.latitude_degrees) / 2
             center_lon = (own_lon + frame.aircraft_position.longitude_degrees) / 2
-        zoom = 15
+        zoom = self._map_zoom
         self.online_map.draw(center_lat, center_lon, zoom)
         cx, cy = self.online_map.project(own_lat, own_lon, center_lat, center_lon, zoom)
         canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8,
@@ -880,7 +907,7 @@ class AegisApp:
     def _draw_adsb_map(self) -> None:
         canvas = self.map_canvas
         positioned = tuple(a for a in self._adsb_aircraft if a.has_position)
-        if self._map_center is None:
+        if self._gps_fix is None and self._map_center is None:
             canvas.delete("all")
             canvas.create_text(
                 max(canvas.winfo_width(), 320) / 2,
@@ -890,11 +917,13 @@ class AegisApp:
                 font=("Consolas", 9),
             )
             return
+        # A measured GPS fix is the fixed home point. Aircraft positions never
+        # move the map center while own-unit position is available.
         center_lat, center_lon = (
             (self._gps_fix.latitude, self._gps_fix.longitude)
             if self._gps_fix else self._map_center
         )
-        zoom = 10
+        zoom = self._map_zoom
         self.online_map.draw(center_lat, center_lon, zoom)
         width = max(canvas.winfo_width(), 320)
         height = max(canvas.winfo_height(), 230)
@@ -923,6 +952,23 @@ class AegisApp:
             )
             canvas.create_oval(x - 6, y - 6, x + 6, y + 6,
                                fill=self.CYAN, outline="#071018", width=2)
+            canvas.create_text(
+                x + 9, y + 9, text="AEGIS", fill="#ffffff", anchor="w",
+                font=("Consolas", 8, "bold"),
+            )
+
+    def _change_map_zoom(self, delta: int) -> None:
+        self._map_zoom = max(5, min(18, self._map_zoom + delta))
+        self.map_zoom_label.configure(text=f"ZOOM {self._map_zoom}")
+        self._draw_map()
+
+    def _reset_map_zoom(self) -> None:
+        self._map_zoom = 9
+        self.map_zoom_label.configure(text=f"ZOOM {self._map_zoom}")
+        self._draw_map()
+
+    def _on_map_wheel(self, event: tk.Event) -> None:
+        self._change_map_zoom(1 if event.delta > 0 else -1)
 
     def _close(self) -> None:
         self._stop_auto()
