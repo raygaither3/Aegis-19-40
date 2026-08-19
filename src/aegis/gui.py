@@ -5,10 +5,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from src.aegis.adsb_source import AdsbAircraft, ReadsbSource
+from src.aegis.gps_source import GpsFix, GpsdSource
 from src.aegis.mission import (
     MissionController,
     MissionFrame,
     MissionMode,
+    SIMULATED_OBSERVER,
 )
 from src.aegis.scenario_simulator import ContactSnapshot
 from src.aegis.online_map import OnlineMap
@@ -39,6 +41,10 @@ class AegisApp:
         self._adsb_job: str | None = None
         self._adsb_live = False
         self._map_center: tuple[float, float] | None = None
+        self._gps_source = GpsdSource()
+        self._gps_fix: GpsFix | None = None
+        self._gps_job: str | None = None
+        self._gps_live = False
 
         root.title("Project Aegis - Situational Awareness")
         root.geometry("1400x820")
@@ -162,6 +168,9 @@ class AegisApp:
         )
         self.mode_label.pack(side="left", padx=(0, 18))
         ttk.Button(
+            controls, text="GPS", style="Aegis.TButton", command=self.toggle_gps,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
             controls,
             text="LIVE ADS-B",
             style="Accent.TButton",
@@ -234,6 +243,7 @@ class AegisApp:
 
         self._divider(column)
         self._section_title(column, "SENSOR STATUS")
+        self.sensor_values: dict[str, tk.Label] = {}
         for sensor, state in (
             ("RF Scanner", "SIM"),
             ("Direction Finder", "STANDBY"),
@@ -248,13 +258,15 @@ class AegisApp:
                 font=("Segoe UI", 8),
             ).pack(side="left")
             active = state == "SIM"
-            tk.Label(
+            state_label = tk.Label(
                 row,
                 text=f"● {state}",
                 bg=self.PANEL,
                 fg=self.GREEN if active else self.MUTED,
                 font=("Consolas", 7),
-            ).pack(side="right")
+            )
+            state_label.pack(side="right")
+            self.sensor_values[sensor] = state_label
 
         self._divider(column)
         self._section_title(column, "SYSTEM HEALTH")
@@ -526,6 +538,53 @@ class AegisApp:
         self._draw_map()
         self._adsb_job = self.root.after(1000, self._poll_adsb)
 
+    def toggle_gps(self) -> None:
+        if self._gps_live:
+            self._stop_gps()
+            self.status_values["GPS"].configure(text="OFFLINE", fg=self.MUTED)
+            self.sensor_values["GPS Receiver"].configure(text="● STANDBY", fg=self.MUTED)
+            self._draw_map()
+            return
+        try:
+            self._gps_source.start()
+        except OSError as error:
+            messagebox.showerror(
+                "GPS Error",
+                f"Aegis could not connect to gpsd at 127.0.0.1:2947.\n\n{error}\n\n"
+                "Start gpsd and confirm your USB/UART GPS has a fix.",
+            )
+            return
+        self._gps_live = True
+        self.status_values["GPS"].configure(text="ACQUIRING", fg=self.AMBER)
+        self.sensor_values["GPS Receiver"].configure(text="● ACQUIRING", fg=self.AMBER)
+        self._poll_gps()
+
+    def _poll_gps(self) -> None:
+        if not self._gps_live:
+            return
+        self._gps_fix = self._gps_source.latest()
+        if self._gps_fix is not None:
+            self.status_values["GPS"].configure(
+                text=f"{self._gps_fix.latitude:.5f}, {self._gps_fix.longitude:.5f}",
+                fg=self.GREEN,
+            )
+            self.sensor_values["GPS Receiver"].configure(text="● LIVE", fg=self.GREEN)
+        elif self._gps_source.error:
+            self.status_values["GPS"].configure(text="GPSD ERROR", fg=self.RED)
+            self.sensor_values["GPS Receiver"].configure(text="● DEGRADED", fg=self.RED)
+        else:
+            self.status_values["GPS"].configure(text="NO FIX", fg=self.AMBER)
+        self._draw_map()
+        self._gps_job = self.root.after(1000, self._poll_gps)
+
+    def _stop_gps(self) -> None:
+        if self._gps_job is not None:
+            self.root.after_cancel(self._gps_job)
+            self._gps_job = None
+        self._gps_live = False
+        self._gps_fix = None
+        self._gps_source.stop()
+
     def _render_aircraft_table(self) -> None:
         self._clear_contacts()
         for key, title in (("id", "ICAO / FLIGHT"), ("frequency", "ALTITUDE"),
@@ -762,38 +821,34 @@ class AegisApp:
         if self._adsb_live:
             self._draw_adsb_map()
             return
-        canvas.delete("all")
-        width = max(canvas.winfo_width(), 320)
-        height = max(canvas.winfo_height(), 230)
-        for x in range(0, width, 40):
-            canvas.create_line(x, 0, x, height, fill="#10262c")
-        for y in range(0, height, 40):
-            canvas.create_line(0, y, width, y, fill="#10262c")
-        cx, cy = width / 2, height * 0.58
-        for radius in (35, 70, 105, 140):
-            canvas.create_oval(
-                cx - radius, cy - radius, cx + radius, cy + radius,
-                outline="#1a5360",
-            )
-        canvas.create_line(cx, 0, cx, height, fill="#245462", dash=(3, 5))
-        canvas.create_line(0, cy, width, cy, fill="#245462", dash=(3, 5))
-        canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8,
-                           fill=self.CYAN, outline="#b8efff")
-        canvas.create_text(cx, cy + 20, text="AEGIS", fill=self.CYAN,
-                           font=("Consolas", 8, "bold"))
+        own_lat = self._gps_fix.latitude if self._gps_fix else SIMULATED_OBSERVER.latitude_degrees
+        own_lon = self._gps_fix.longitude if self._gps_fix else SIMULATED_OBSERVER.longitude_degrees
         frame = self.controller.current
+        center_lat, center_lon = own_lat, own_lon
+        if frame is not None and frame.aircraft_position is not None and not self._gps_fix:
+            center_lat = (own_lat + frame.aircraft_position.latitude_degrees) / 2
+            center_lon = (own_lon + frame.aircraft_position.longitude_degrees) / 2
+        zoom = 15
+        self.online_map.draw(center_lat, center_lon, zoom)
+        cx, cy = self.online_map.project(own_lat, own_lon, center_lat, center_lon, zoom)
+        canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8,
+                           fill=self.CYAN, outline="#071018", width=2)
+        canvas.create_text(cx + 11, cy + 10, text="AEGIS", fill="#071018",
+                           anchor="w", font=("Consolas", 8, "bold"))
         if frame is None:
             canvas.create_text(
-                cx, 24, text="AWAITING MISSION EVENTS",
-                fill=self.MUTED, font=("Consolas", 9),
+                8, 8,
+                text="LIVE GPS / OPENSTREETMAP" if self._gps_fix else "OPENSTREETMAP / SIMULATED LOCATION",
+                fill="#071018", anchor="nw", font=("Consolas", 8, "bold"),
             )
             return
         result = frame.scan_result
-        if frame.bearing_degrees is not None and frame.distance_m is not None:
-            angle = math.radians(frame.bearing_degrees - 90.0)
-            radius = min(140.0, 35.0 + frame.distance_m * 0.32)
-            x = cx + math.cos(angle) * radius
-            y = cy + math.sin(angle) * radius
+        if frame.aircraft_position is not None:
+            x, y = self.online_map.project(
+                frame.aircraft_position.latitude_degrees,
+                frame.aircraft_position.longitude_degrees,
+                center_lat, center_lon, zoom,
+            )
             color = self.GREEN
             canvas.create_line(cx, cy, x, y, fill=color, dash=(4, 4))
             canvas.create_oval(
@@ -813,12 +868,12 @@ class AegisApp:
             8,
             height - 8,
             text=f"RF CONTACT CONFIDENCE: {confidence:.0f}%",
-            fill=self.AMBER,
+            fill="#071018",
             anchor="sw",
             font=("Consolas", 7),
         )
-        canvas.create_text(8, 8, text="FICTIONAL REMOTE ID TRAJECTORY",
-                           fill=self.MUTED, anchor="nw", font=("Consolas", 7))
+        canvas.create_text(8, 8, text="OPENSTREETMAP / FICTIONAL REMOTE ID",
+                           fill="#071018", anchor="nw", font=("Consolas", 7, "bold"))
 
     def _draw_adsb_map(self) -> None:
         canvas = self.map_canvas
@@ -833,7 +888,10 @@ class AegisApp:
                 font=("Consolas", 9),
             )
             return
-        center_lat, center_lon = self._map_center
+        center_lat, center_lon = (
+            (self._gps_fix.latitude, self._gps_fix.longitude)
+            if self._gps_fix else self._map_center
+        )
         zoom = 10
         self.online_map.draw(center_lat, center_lon, zoom)
         width = max(canvas.winfo_width(), 320)
@@ -858,10 +916,18 @@ class AegisApp:
         canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / 1090 MHz",
                            fill="#071018", anchor="nw",
                            font=("Consolas", 8, "bold"))
+        if self._gps_fix:
+            x, y = self.online_map.project(
+                self._gps_fix.latitude, self._gps_fix.longitude,
+                center_lat, center_lon, zoom,
+            )
+            canvas.create_oval(x - 6, y - 6, x + 6, y + 6,
+                               fill=self.CYAN, outline="#071018", width=2)
 
     def _close(self) -> None:
         self._stop_auto()
         self._stop_adsb()
+        self._stop_gps()
         self.online_map.close()
         self.root.destroy()
 

@@ -31,6 +31,7 @@ class OnlineMap:
         self.ready: dict[tuple[int, int, int], bytes | None] = {}
         self.images: dict[tuple[int, int, int], ImageTk.PhotoImage] = {}
         self.redraw = None
+        self._redraw_job: str | None = None
 
     def draw(self, center_lat: float, center_lon: float, zoom: int = 10) -> None:
         self._consume_ready()
@@ -61,6 +62,13 @@ class OnlineMap:
         canvas.create_text(width - 6, height - 5,
                            text="© OpenStreetMap contributors",
                            fill="#dce8ed", anchor="se", font=("Sans", 7))
+        if self.pending and self.redraw is not None and self._redraw_job is None:
+            self._redraw_job = self.root.after(150, self._refresh)
+
+    def _refresh(self) -> None:
+        self._redraw_job = None
+        if self.redraw is not None:
+            self.redraw()
 
     def project(self, latitude: float, longitude: float, center_lat: float,
                 center_lon: float, zoom: int = 10) -> tuple[float, float]:
@@ -114,4 +122,7 @@ class OnlineMap:
                 continue
 
     def close(self) -> None:
+        if self._redraw_job is not None:
+            self.root.after_cancel(self._redraw_job)
+            self._redraw_job = None
         self.executor.shutdown(wait=False, cancel_futures=True)
