@@ -1,10 +1,16 @@
 import unittest
 
 from src.aegis.adsb_source import parse_aircraft_json
-from src.aegis.online_map import geo_to_world
+from src.aegis.online_map import geo_to_world, world_to_geo
 
 
 class AdsbSourceTests(unittest.TestCase):
+    def test_web_mercator_round_trip(self) -> None:
+        world = geo_to_world(41.881832, -87.623177, 11)
+        latitude, longitude = world_to_geo(*world, 11)
+        self.assertAlmostEqual(latitude, 41.881832)
+        self.assertAlmostEqual(longitude, -87.623177)
+
     def test_parses_positioned_and_unpositioned_aircraft(self) -> None:
         aircraft = parse_aircraft_json({"aircraft": [
             {"hex": "abc123", "flight": " UAL12 ", "lat": 41.9,

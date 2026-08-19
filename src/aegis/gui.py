@@ -13,7 +13,7 @@ from src.aegis.mission import (
     SIMULATED_OBSERVER,
 )
 from src.aegis.scenario_simulator import ContactSnapshot
-from src.aegis.online_map import OnlineMap
+from src.aegis.online_map import OnlineMap, geo_to_world, world_to_geo
 
 
 class AegisApp:
@@ -48,6 +48,9 @@ class AegisApp:
         # Zoom 9 provides approximately a 20-mile-radius home view at the
         # dashboard's normal Raspberry Pi display size and mid-US latitudes.
         self._map_zoom = 9
+        self._map_pan_center: tuple[float, float] | None = None
+        self._map_display_center: tuple[float, float] | None = None
+        self._map_drag_at: tuple[int, int] | None = None
 
         root.title("Project Aegis - Situational Awareness")
         root.geometry("1400x820")
@@ -309,9 +312,14 @@ class AegisApp:
         )
         self.map_zoom_label.pack(side="right", padx=(0, 7))
         ttk.Button(
-            map_header, text="20 MI", width=6, style="Aegis.TButton",
-            command=self._reset_map_zoom,
+            map_header, text="HOME", width=6, style="Aegis.TButton",
+            command=self._reset_map_view,
         ).pack(side="right", padx=(0, 7))
+        self.map_layer_button = ttk.Button(
+            map_header, text="SAT", width=5, style="Aegis.TButton",
+            command=self._toggle_map_layer,
+        )
+        self.map_layer_button.pack(side="right", padx=(0, 7))
         self.map_canvas = tk.Canvas(
             situational, bg="#09151a", highlightthickness=1,
             highlightbackground=self.BORDER,
@@ -321,6 +329,9 @@ class AegisApp:
         self.map_canvas.bind("<MouseWheel>", self._on_map_wheel)
         self.map_canvas.bind("<Button-4>", lambda _: self._change_map_zoom(1))
         self.map_canvas.bind("<Button-5>", lambda _: self._change_map_zoom(-1))
+        self.map_canvas.bind("<ButtonPress-1>", self._start_map_drag)
+        self.map_canvas.bind("<B1-Motion>", self._drag_map)
+        self.map_canvas.bind("<ButtonRelease-1>", self._end_map_drag)
         self.online_map = OnlineMap(self.root, self.map_canvas)
         self.online_map.redraw = self._draw_map
 
@@ -858,6 +869,8 @@ class AegisApp:
             center_lat = (own_lat + frame.aircraft_position.latitude_degrees) / 2
             center_lon = (own_lon + frame.aircraft_position.longitude_degrees) / 2
         zoom = self._map_zoom
+        center_lat, center_lon = self._map_pan_center or (center_lat, center_lon)
+        self._map_display_center = (center_lat, center_lon)
         self.online_map.draw(center_lat, center_lon, zoom)
         cx, cy = self.online_map.project(own_lat, own_lon, center_lat, center_lon, zoom)
         canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8,
@@ -867,7 +880,7 @@ class AegisApp:
         if frame is None:
             canvas.create_text(
                 8, 8,
-                text="LIVE GPS / USGS IMAGERY" if self._gps_fix else "USGS IMAGERY / SIMULATED LOCATION",
+                text="LIVE GPS / MAP" if self._gps_fix else "MAP / SIMULATED LOCATION",
                 fill="#ffffff", anchor="nw", font=("Consolas", 8, "bold"),
             )
             return
@@ -901,7 +914,7 @@ class AegisApp:
             anchor="sw",
             font=("Consolas", 7),
         )
-        canvas.create_text(8, 8, text="USGS IMAGERY / FICTIONAL REMOTE ID",
+        canvas.create_text(8, 8, text="MAP / FICTIONAL REMOTE ID",
                            fill="#ffffff", anchor="nw", font=("Consolas", 7, "bold"))
 
     def _draw_adsb_map(self) -> None:
@@ -924,6 +937,8 @@ class AegisApp:
             if self._gps_fix else self._map_center
         )
         zoom = self._map_zoom
+        center_lat, center_lon = self._map_pan_center or (center_lat, center_lon)
+        self._map_display_center = (center_lat, center_lon)
         self.online_map.draw(center_lat, center_lon, zoom)
         width = max(canvas.winfo_width(), 320)
         height = max(canvas.winfo_height(), 230)
@@ -942,7 +957,7 @@ class AegisApp:
                 text=aircraft.flight or aircraft.icao,
                 fill="#ffffff", anchor="w", font=("Consolas", 8, "bold"),
             )
-        canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / USGS IMAGERY",
+        canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / 1090 MHz",
                            fill="#ffffff", anchor="nw",
                            font=("Consolas", 8, "bold"))
         if self._gps_fix:
@@ -962,10 +977,43 @@ class AegisApp:
         self.map_zoom_label.configure(text=f"ZOOM {self._map_zoom}")
         self._draw_map()
 
-    def _reset_map_zoom(self) -> None:
+    def _reset_map_view(self) -> None:
         self._map_zoom = 9
+        self._map_pan_center = None
         self.map_zoom_label.configure(text=f"ZOOM {self._map_zoom}")
         self._draw_map()
+
+    def _toggle_map_layer(self) -> None:
+        self.online_map.layer = (
+            "satellite" if self.online_map.layer == "map" else "map"
+        )
+        self.map_layer_button.configure(
+            text="MAP" if self.online_map.layer == "satellite" else "SAT"
+        )
+        self._draw_map()
+
+    def _start_map_drag(self, event: tk.Event) -> None:
+        self._map_drag_at = (event.x, event.y)
+        self.map_canvas.configure(cursor="fleur")
+
+    def _drag_map(self, event: tk.Event) -> None:
+        if self._map_drag_at is None or self._map_display_center is None:
+            return
+        previous_x, previous_y = self._map_drag_at
+        center_x, center_y = geo_to_world(
+            *self._map_display_center, self._map_zoom
+        )
+        self._map_pan_center = world_to_geo(
+            center_x - (event.x - previous_x),
+            center_y - (event.y - previous_y),
+            self._map_zoom,
+        )
+        self._map_drag_at = (event.x, event.y)
+        self._draw_map()
+
+    def _end_map_drag(self, _: tk.Event) -> None:
+        self._map_drag_at = None
+        self.map_canvas.configure(cursor="")
 
     def _on_map_wheel(self, event: tk.Event) -> None:
         self._change_map_zoom(1 if event.delta > 0 else -1)

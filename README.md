@@ -16,7 +16,7 @@ tracking, and assessing RF contacts. Version 1 is targeted for Raspberry Pi 4.
 - Run deterministic multi-scan scenarios without an SDR
 - Display a lightweight native situational-awareness dashboard
 - Receive live 1090 MHz ADS-B aircraft through an RTL-enabled `readsb`
-- Plot measured aircraft positions over cached USGS aerial imagery
+- Plot measured aircraft positions over switchable street-map and USGS imagery layers
 - Read a local GPS receiver through `gpsd` and center the real map on the unit
 
 Simulation locations remain clearly labeled. When GPS is enabled, the Aegis
@@ -49,9 +49,11 @@ cd ~/Aegis-19-40
 python3 -m src.aegis.gui
 ```
 
-Close Gqrx, `rtl_adsb`, and other SDR programs first. The basemap uses U.S.
-Geological Survey aerial imagery and caches downloaded tiles under
-`~/.cache/aegis/usgs_imagery_tiles`; receiver data is not uploaded by Aegis.
+Close Gqrx, `rtl_adsb`, and other SDR programs first. The default basemap uses
+OpenStreetMap, with USGS aerial imagery available from the **SAT** control.
+Downloaded tiles are cached under `~/.cache/aegis`; receiver data is not
+uploaded by Aegis. Drag the map to pan, use `+`/`−` to zoom, and select
+**HOME** to return to the GPS-centered approximately 20-mile view.
 
 ## Use a GPS receiver
 
