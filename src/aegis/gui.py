@@ -558,7 +558,9 @@ class AegisApp:
             messagebox.showerror("Live ADS-B Error", str(error))
             return
         positioned = tuple(a for a in self._adsb_aircraft if a.has_position)
-        if positioned:
+        # Keep the fallback center stable. Once established, incoming aircraft
+        # positions must not drag the map around.
+        if positioned and self._map_center is None:
             self._map_center = (
                 sum(a.latitude for a in positioned) / len(positioned),
                 sum(a.longitude for a in positioned) / len(positioned),
@@ -600,8 +602,11 @@ class AegisApp:
     def _poll_gps(self) -> None:
         if not self._gps_live:
             return
-        self._gps_fix = self._gps_source.latest()
-        if self._gps_fix is not None:
+        latest_fix = self._gps_source.latest()
+        if latest_fix is not None:
+            # Retain the last measured fix through brief gpsd gaps so the map
+            # never jumps from Aegis to an aircraft-derived center.
+            self._gps_fix = latest_fix
             self.status_values["GPS"].configure(
                 text=f"{self._gps_fix.latitude:.5f}, {self._gps_fix.longitude:.5f}",
                 fg=self.GREEN,
@@ -765,7 +770,11 @@ class AegisApp:
         if selected and selected[0] in self._contacts_by_row:
             self._show_contact(self._contacts_by_row[selected[0]])
         elif selected and selected[0] in self._aircraft_by_row:
-            self._show_aircraft(self._aircraft_by_row[selected[0]])
+            aircraft = self._aircraft_by_row[selected[0]]
+            self._show_aircraft(aircraft)
+            if aircraft.has_position:
+                self._map_pan_center = (aircraft.latitude, aircraft.longitude)
+                self._draw_map()
 
     def _show_aircraft(self, aircraft: AdsbAircraft) -> None:
         self.detail_title.configure(text=aircraft.flight or aircraft.icao, fg=self.GREEN)
