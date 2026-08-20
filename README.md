@@ -16,6 +16,7 @@ tracking, and assessing RF contacts. Version 1 is targeted for Raspberry Pi 4.
 - Run deterministic multi-scan scenarios without an SDR
 - Display a lightweight native situational-awareness dashboard
 - Receive live 1090 MHz ADS-B aircraft through an RTL-enabled `readsb`
+- Display measured live spectrum sweeps and a waterfall through `rtl_power`
 - Plot measured aircraft positions over switchable street-map and USGS imagery layers
 - Read a local GPS receiver through `gpsd` and center the real map on the unit
 
@@ -60,6 +61,18 @@ uploaded by Aegis. Drag the map to pan, use `+`/`−` to zoom, and select
 Connect a gpsd-compatible USB or UART receiver, start `gpsd`, then click **GPS**.
 Aegis connects to `127.0.0.1:2947`, displays the newest valid fix, and centers
 the USGS imagery view on the unit. No position data is sent to a cloud service.
+
+## Run live RF spectrum analysis
+
+Install the RTL-SDR command-line tools so `rtl_power` is on `PATH`, connect an
+RTL-SDR, and select **Live RF**. The default receive-only sweep covers the
+902–928 MHz ISM band with 100 kHz bins. Aegis estimates the noise floor,
+highlights signals more than 10 dB above it, and tracks persistent activity.
+
+This is an RF activity detector, not yet a drone classifier. Most consumer
+drone links use 2.4 or 5.8 GHz, beyond a stock RTL-SDR's tuning range; those
+bands require a suitable wider-band SDR or downconverter. Do not infer that a
+detected transmitter is a drone without protocol decoding or sensor fusion.
 
 ## Run the tests
 

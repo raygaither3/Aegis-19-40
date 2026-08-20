@@ -4,6 +4,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import numpy as np
+
 from src.aegis.adsb_source import AdsbAircraft, ReadsbSource
 from src.aegis.gps_source import GpsFix, GpsdSource
 from src.aegis.mission import (
@@ -14,6 +16,9 @@ from src.aegis.mission import (
 )
 from src.aegis.scenario_simulator import ContactSnapshot
 from src.aegis.online_map import OnlineMap, geo_to_world, world_to_geo
+from src.aegis.rf_source import RtlPowerSource, SpectrumSweep
+from src.aegis.signal_detector import detect_signals
+from src.aegis.tracker import SignalTracker
 
 
 class AegisApp:
@@ -40,6 +45,13 @@ class AegisApp:
         self._adsb_aircraft: tuple[AdsbAircraft, ...] = ()
         self._adsb_job: str | None = None
         self._adsb_live = False
+        self._rf_source = RtlPowerSource()
+        self._rf_tracker = SignalTracker(frequency_tolerance_hz=150_000)
+        self._rf_job: str | None = None
+        self._rf_live = False
+        self._rf_sequence = 0
+        self._rf_sweep: SpectrumSweep | None = None
+        self._rf_history: list[np.ndarray] = []
         self._map_center: tuple[float, float] | None = None
         self._gps_source = GpsdSource()
         self._gps_fix: GpsFix | None = None
@@ -175,6 +187,10 @@ class AegisApp:
         self.mode_label.pack(side="left", padx=(0, 18))
         ttk.Button(
             controls, text="GPS", style="Aegis.TButton", command=self.toggle_gps,
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls, text="LIVE RF", style="Accent.TButton",
+            command=self.start_live_rf,
         ).pack(side="left", padx=(0, 6))
         ttk.Button(
             controls,
@@ -465,6 +481,7 @@ class AegisApp:
         self._show_ready_state()
 
     def start_simulation(self) -> None:
+        self._stop_live_rf()
         self._stop_adsb()
         self._stop_auto()
         self.controller.start_simulation()
@@ -514,6 +531,7 @@ class AegisApp:
 
     def stop_mission(self) -> None:
         self._stop_auto()
+        self._stop_live_rf()
         self._stop_adsb()
         self.controller.stop()
         self.next_button.configure(state="disabled")
@@ -523,6 +541,7 @@ class AegisApp:
         """Start a local, measured ADS-B session using RTL-enabled readsb."""
 
         self._stop_auto()
+        self._stop_live_rf()
         self.controller.stop()
         try:
             self._adsb_source.start()
@@ -547,6 +566,99 @@ class AegisApp:
             fg=self.GREEN,
         )
         self._poll_adsb()
+
+    def start_live_rf(self) -> None:
+        """Start passive, measured spectrum acquisition from rtl_power."""
+        self._stop_auto()
+        self._stop_adsb()
+        self.controller.stop()
+        try:
+            self._rf_source.start()
+        except (FileNotFoundError, OSError, RuntimeError) as error:
+            messagebox.showerror(
+                "Live RF Error",
+                f"Aegis could not start rtl_power.\n\n{error}\n\n"
+                "Close other SDR applications and confirm the RTL-SDR is connected.",
+            )
+            return
+        self._rf_live = True
+        self._rf_sequence = 0
+        self._rf_sweep = None
+        self._rf_history.clear()
+        self._rf_tracker = SignalTracker(frequency_tolerance_hz=150_000)
+        self.next_button.configure(state="disabled")
+        self.unit_label.configure(text="  UNIT 01 / LIVE RF")
+        self.mode_label.configure(text="MODE: MEASURED", fg=self.GREEN)
+        self.status_values["Input Source"].configure(text="RTL-SDR / SPECTRUM")
+        self.status_values["Scan"].configure(text="WAITING")
+        self.sensor_values["RF Scanner"].configure(text="● LIVE", fg=self.GREEN)
+        self.footer_status.configure(text="ACQUIRING 902–928 MHz", fg=self.GREEN)
+        self.classification_note.configure(
+            text="Measured RF activity; classification is not yet implemented",
+            fg=self.AMBER,
+        )
+        self._poll_live_rf()
+
+    def _poll_live_rf(self) -> None:
+        if not self._rf_live:
+            return
+        if self._rf_source.error:
+            error = self._rf_source.error
+            self._stop_live_rf()
+            messagebox.showerror("Live RF Error", error)
+            return
+        sequence, sweep = self._rf_source.latest(self._rf_sequence)
+        if sweep is not None:
+            self._rf_sequence = sequence
+            self._rf_sweep = sweep
+            noise, threshold, detections = detect_signals(
+                sweep.frequencies_hz, sweep.power_db
+            )
+            tracks = self._rf_tracker.update(detections)
+            self._render_live_rf(tracks, noise, threshold)
+        self._rf_job = self.root.after(200, self._poll_live_rf)
+
+    def _render_live_rf(self, tracks, noise: float, threshold: float) -> None:
+        self.status_values["RF Activity"].configure(text=f"{len(tracks)} ACTIVE")
+        confirmed = sum(track.state.value == "confirmed" for track in tracks)
+        self.status_values["Alerts"].configure(
+            text=f"{confirmed} CONFIRMED", fg=self.RED if confirmed else self.GREEN
+        )
+        self.status_values["Scan"].configure(text=str(self._rf_sequence))
+        self.footer_status.configure(
+            text=f"LIVE RF  |  NOISE {noise:.1f} dB  |  THRESHOLD {threshold:.1f} dB",
+            fg=self.CYAN,
+        )
+        self._clear_contacts()
+        for track in tracks:
+            contact = ContactSnapshot(
+                track.signal_id, track.center_frequency_hz, track.bandwidth_hz,
+                track.peak_power_db, track.confidence, track.state,
+                track.detection_count, track.missed_scans,
+            )
+            row = self.contact_table.insert(
+                "", "end",
+                values=(f"#{contact.signal_id}",
+                        f"{contact.center_frequency_hz / 1e6:.3f} MHz",
+                        f"{contact.confidence:.0f}%", contact.state.value.upper(),
+                        contact.detection_count, contact.missed_scans),
+                tags=(contact.state.value,),
+            )
+            self._contacts_by_row[row] = contact
+        rows = self.contact_table.get_children()
+        if rows:
+            self.contact_table.selection_set(rows[0])
+            self._show_contact(self._contacts_by_row[rows[0]])
+        self._draw_signal()
+
+    def _stop_live_rf(self) -> None:
+        if self._rf_job is not None:
+            self.root.after_cancel(self._rf_job)
+            self._rf_job = None
+        self._rf_live = False
+        self._rf_source.stop()
+        if hasattr(self, "sensor_values"):
+            self.sensor_values["RF Scanner"].configure(text="● SIM", fg=self.GREEN)
 
     def _poll_adsb(self) -> None:
         if not self._adsb_live:
@@ -1029,6 +1141,7 @@ class AegisApp:
 
     def _close(self) -> None:
         self._stop_auto()
+        self._stop_live_rf()
         self._stop_adsb()
         self._stop_gps()
         self.online_map.close()
@@ -1044,6 +1157,9 @@ class AegisApp:
             canvas.create_line(x, 0, x, split, fill="#13303a")
         for y in range(0, split, 30):
             canvas.create_line(0, y, width, y, fill="#13303a")
+        if self._rf_live and self._rf_sweep is not None:
+            self._draw_live_signal(canvas, width, height, split)
+            return
         scan = (
             self.controller.current.scan_result.scan_number
             if self.controller.current
@@ -1081,6 +1197,43 @@ class AegisApp:
                 y1 = waterfall_top + row * cell_h
                 y2 = y1 + cell_h + 1
                 canvas.create_rectangle(x1, y1, x2, y2,
+                                        fill=palette[level], outline="")
+        canvas.create_line(0, split, width, split, fill=self.BORDER)
+
+    def _draw_live_signal(
+        self, canvas: tk.Canvas, width: int, height: int, split: int
+    ) -> None:
+        sweep = self._rf_sweep
+        if sweep is None:
+            return
+        powers = sweep.power_db
+        low = float(np.percentile(powers, 5))
+        high = float(np.percentile(powers, 99))
+        span = max(high - low, 6.0)
+        x_values = np.linspace(0, width - 1, powers.size)
+        y_values = split - 8 - (powers - low) / span * (split - 20)
+        points = [coordinate for pair in zip(x_values, y_values) for coordinate in pair]
+        canvas.create_line(*points, fill="#2bd4a7", width=1)
+        start_mhz = sweep.frequencies_hz[0] / 1e6
+        stop_mhz = sweep.frequencies_hz[-1] / 1e6
+        canvas.create_text(6, 5, text=f"{start_mhz:.1f} MHz", fill=self.MUTED,
+                           anchor="nw", font=("Consolas", 7))
+        canvas.create_text(width - 6, 5, text=f"{stop_mhz:.1f} MHz", fill=self.MUTED,
+                           anchor="ne", font=("Consolas", 7))
+        columns = 70
+        sample_at = np.linspace(0, powers.size - 1, columns).astype(int)
+        normalized = np.clip((powers[sample_at] - low) / span, 0, 1)
+        self._rf_history.insert(0, normalized)
+        del self._rf_history[18:]
+        palette = ("#071b27", "#0b3442", "#126b70", "#24a887", "#d5b447")
+        waterfall_top = split + 8
+        cell_h = max((height - waterfall_top) / 18, 1)
+        for row, values in enumerate(self._rf_history):
+            for col, value in enumerate(values):
+                level = min(int(value * len(palette)), len(palette) - 1)
+                x1, x2 = col * width / columns, (col + 1) * width / columns + 1
+                y1 = waterfall_top + row * cell_h
+                canvas.create_rectangle(x1, y1, x2, y1 + cell_h + 1,
                                         fill=palette[level], outline="")
         canvas.create_line(0, split, width, split, fill=self.BORDER)
 
