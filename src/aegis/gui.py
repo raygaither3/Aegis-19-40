@@ -1076,14 +1076,18 @@ class AegisApp:
             )
             if not (-15 <= x <= width + 15 and -15 <= y <= height + 15):
                 continue
-            canvas.create_text(
-                x, y, text="✈", fill=self.GREEN,
-                font=("DejaVu Sans", 18, "bold"),
+            canvas.create_oval(
+                x - 15, y - 15, x + 15, y + 15,
+                fill="#071018", outline=self.GREEN, width=2,
             )
             canvas.create_text(
-                x + 14, y - 9,
+                x, y, text="✈", fill=self.GREEN,
+                font=("DejaVu Sans", 28, "bold"),
+            )
+            canvas.create_text(
+                x + 20, y - 12,
                 text=aircraft.flight or aircraft.icao,
-                fill="#ffffff", anchor="w", font=("Consolas", 8, "bold"),
+                fill="#ffffff", anchor="w", font=("Consolas", 9, "bold"),
             )
         canvas.create_text(7, 7, text="LIVE MEASURED ADS-B / 1090 MHz",
                            fill="#ffffff", anchor="nw",

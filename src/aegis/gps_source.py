@@ -25,22 +25,33 @@ class GpsdSource:
         self.host, self.port = host, port
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
+        self._stop_event: threading.Event | None = None
         self._lock = threading.Lock()
         self._fix: GpsFix | None = None
         self._received_at: float | None = None
         self._error: str | None = None
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
+        # Always build a fresh session. A previous reader can still be winding
+        # down briefly after its socket closes; reusing its stop event can make
+        # a quick GPS off/on cycle appear active without a live connection.
+        self.stop()
         connection = socket.create_connection((self.host, self.port), timeout=3)
         connection.settimeout(1.0)
         connection.sendall(b'?WATCH={"enable":true,"json":true};\n')
+        stop_event = threading.Event()
         self._socket = connection
-        self._stop.clear()
-        self._error = None
-        self._thread = threading.Thread(target=self._run, name="aegis-gpsd", daemon=True)
+        self._stop_event = stop_event
+        with self._lock:
+            self._fix = None
+            self._received_at = None
+            self._error = None
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(connection, stop_event),
+            name="aegis-gpsd",
+            daemon=True,
+        )
         self._thread.start()
 
     def latest(self, max_age_seconds: float = 5.0) -> GpsFix | None:
@@ -55,7 +66,9 @@ class GpsdSource:
             return self._error
 
     def stop(self) -> None:
-        self._stop.set()
+        stop_event, self._stop_event = self._stop_event, None
+        if stop_event is not None:
+            stop_event.set()
         connection, self._socket = self._socket, None
         if connection is not None:
             try:
@@ -67,13 +80,12 @@ class GpsdSource:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=1.5)
 
-    def _run(self) -> None:
-        connection = self._socket
-        if connection is None:
-            return
+    def _run(
+        self, connection: socket.socket, stop_event: threading.Event
+    ) -> None:
         buffer = b""
         try:
-            while not self._stop.is_set():
+            while not stop_event.is_set():
                 try:
                     chunk = connection.recv(4096)
                 except socket.timeout:
@@ -85,7 +97,7 @@ class GpsdSource:
                     line, buffer = buffer.split(b"\n", 1)
                     self._accept_report(line)
         except (OSError, ConnectionError, ValueError) as error:
-            if not self._stop.is_set():
+            if not stop_event.is_set():
                 with self._lock:
                     self._error = str(error)
 
