@@ -18,6 +18,7 @@ from src.aegis.scenario_simulator import ContactSnapshot
 from src.aegis.online_map import OnlineMap, geo_to_world, world_to_geo
 from src.aegis.rf_source import RtlPowerSource, SpectrumSweep
 from src.aegis.signal_detector import detect_signals
+from src.aegis.system_health import SystemHealthMonitor
 from src.aegis.tracker import SignalTracker
 
 
@@ -52,6 +53,8 @@ class AegisApp:
         self._rf_sequence = 0
         self._rf_sweep: SpectrumSweep | None = None
         self._rf_history: list[np.ndarray] = []
+        self._health_monitor = SystemHealthMonitor()
+        self._health_job: str | None = None
         self._map_center: tuple[float, float] | None = None
         self._gps_source = GpsdSource()
         self._gps_fix: GpsFix | None = None
@@ -73,6 +76,7 @@ class AegisApp:
         self._configure_styles()
         self._build_dashboard()
         self._show_ready_state()
+        self._poll_system_health()
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -292,13 +296,16 @@ class AegisApp:
 
         self._divider(column)
         self._section_title(column, "SYSTEM HEALTH")
+        self.health_values: dict[str, tk.Label] = {}
         for label, value in (("CPU", "--"), ("MEMORY", "--"), ("TEMP", "--")):
             row = tk.Frame(column, bg=self.PANEL)
             row.pack(fill="x", pady=4)
             tk.Label(row, text=label, bg=self.PANEL, fg=self.MUTED,
                      font=("Consolas", 8)).pack(side="left")
-            tk.Label(row, text=value, bg=self.PANEL, fg=self.CYAN,
-                     font=("Consolas", 8)).pack(side="right")
+            health_label = tk.Label(row, text=value, bg=self.PANEL, fg=self.CYAN,
+                                    font=("Consolas", 8))
+            health_label.pack(side="right")
+            self.health_values[label] = health_label
 
     def _build_center_column(self, parent: ttk.Frame) -> None:
         column = ttk.Frame(parent, style="Bg.TFrame")
@@ -1139,7 +1146,25 @@ class AegisApp:
     def _on_map_wheel(self, event: tk.Event) -> None:
         self._change_map_zoom(1 if event.delta > 0 else -1)
 
+    def _poll_system_health(self) -> None:
+        health = self._health_monitor.read()
+        readings = {
+            "CPU": (health.cpu_percent, "%", 85.0, 95.0),
+            "MEMORY": (health.memory_percent, "%", 80.0, 92.0),
+            "TEMP": (health.temperature_c, "°C", 70.0, 80.0),
+        }
+        for name, (value, suffix, warning, critical) in readings.items():
+            if value is None:
+                self.health_values[name].configure(text="N/A", fg=self.MUTED)
+                continue
+            color = self.RED if value >= critical else self.AMBER if value >= warning else self.CYAN
+            self.health_values[name].configure(text=f"{value:.1f}{suffix}", fg=color)
+        self._health_job = self.root.after(2000, self._poll_system_health)
+
     def _close(self) -> None:
+        if self._health_job is not None:
+            self.root.after_cancel(self._health_job)
+            self._health_job = None
         self._stop_auto()
         self._stop_live_rf()
         self._stop_adsb()
