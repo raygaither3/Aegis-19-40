@@ -151,6 +151,7 @@ class AegisApp:
         self._build_header(shell)
 
         body = ttk.Frame(shell, style="Bg.TFrame")
+        self.body = body
         body.pack(fill="both", expand=True, pady=(10, 8))
         body.columnconfigure(0, weight=18, minsize=190)
         body.columnconfigure(1, weight=52, minsize=500)
@@ -243,6 +244,7 @@ class AegisApp:
 
     def _build_status_column(self, parent: ttk.Frame) -> None:
         column = ttk.Frame(parent, style="Panel.TFrame", padding=12)
+        self.status_column = column
         column.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         self._section_title(column, "STATUS OVERVIEW")
         self.status_values: dict[str, tk.Label] = {}
@@ -309,12 +311,14 @@ class AegisApp:
 
     def _build_center_column(self, parent: ttk.Frame) -> None:
         column = ttk.Frame(parent, style="Bg.TFrame")
+        self.center_column = column
         column.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
         column.rowconfigure(0, weight=54)
         column.rowconfigure(1, weight=46)
         column.columnconfigure(0, weight=1)
 
         situational = ttk.Frame(column, style="Panel.TFrame", padding=10)
+        self.situational_panel = situational
         situational.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         map_header = ttk.Frame(situational, style="Panel.TFrame")
         map_header.pack(fill="x")
@@ -359,6 +363,7 @@ class AegisApp:
         self.online_map.redraw = self._draw_map
 
         contacts = ttk.Frame(column, style="Panel.TFrame", padding=10)
+        self.contacts_panel = contacts
         contacts.grid(row=1, column=0, sticky="nsew")
         self._section_title(contacts, "ACTIVE CONTACTS")
         columns = ("id", "frequency", "confidence", "state", "seen", "missed")
@@ -384,12 +389,14 @@ class AegisApp:
 
     def _build_analysis_column(self, parent: ttk.Frame) -> None:
         column = ttk.Frame(parent, style="Bg.TFrame")
+        self.analysis_column = column
         column.grid(row=0, column=2, sticky="nsew")
         column.rowconfigure(0, weight=42)
         column.rowconfigure(1, weight=58)
         column.columnconfigure(0, weight=1)
 
         signal = ttk.Frame(column, style="Panel.TFrame", padding=10)
+        self.signal_panel = signal
         signal.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         self._section_title(signal, "SIGNAL ANALYSIS")
         self.signal_canvas = tk.Canvas(
@@ -400,6 +407,7 @@ class AegisApp:
         self.signal_canvas.bind("<Configure>", lambda _: self._draw_signal())
 
         detail = ttk.Frame(column, style="Panel.TFrame", padding=12)
+        self.detail_panel = detail
         detail.grid(row=1, column=0, sticky="nsew")
         self._section_title(detail, "CONTACT DETAILS")
         self.detail_title = tk.Label(
@@ -560,6 +568,7 @@ class AegisApp:
             )
             return
         self._adsb_live = True
+        self._set_adsb_layout(True)
         self._adsb_aircraft = ()
         self._map_center = None
         self.next_button.configure(state="disabled")
@@ -773,9 +782,40 @@ class AegisApp:
             self.root.after_cancel(self._adsb_job)
             self._adsb_job = None
         self._adsb_live = False
+        self._set_adsb_layout(False)
         self._adsb_source.stop()
         self._adsb_aircraft = ()
         self._aircraft_by_row.clear()
+
+    def _set_adsb_layout(self, enabled: bool) -> None:
+        """Give the map priority and hide RF-only analysis during ADS-B."""
+
+        if enabled:
+            self.body.columnconfigure(0, weight=14, minsize=175)
+            self.body.columnconfigure(1, weight=66, minsize=620)
+            self.body.columnconfigure(2, weight=20, minsize=250)
+            self.center_column.rowconfigure(0, weight=80)
+            self.center_column.rowconfigure(1, weight=20)
+            self.signal_panel.grid_remove()
+            self.analysis_column.rowconfigure(0, weight=1)
+            self.analysis_column.rowconfigure(1, weight=0)
+            self.detail_panel.grid_configure(
+                row=0, column=0, rowspan=2, sticky="nsew"
+            )
+        else:
+            self.body.columnconfigure(0, weight=18, minsize=190)
+            self.body.columnconfigure(1, weight=52, minsize=500)
+            self.body.columnconfigure(2, weight=30, minsize=320)
+            self.center_column.rowconfigure(0, weight=54)
+            self.center_column.rowconfigure(1, weight=46)
+            self.analysis_column.rowconfigure(0, weight=42)
+            self.analysis_column.rowconfigure(1, weight=58)
+            self.signal_panel.grid(
+                row=0, column=0, sticky="nsew", pady=(0, 8)
+            )
+            self.detail_panel.grid_configure(
+                row=1, column=0, rowspan=1, sticky="nsew"
+            )
 
     def toggle_auto(self) -> None:
         if self._auto_running:
@@ -900,6 +940,12 @@ class AegisApp:
         self.detail_state.configure(
             text=f"{aircraft.aircraft_class}  |  ICAO {aircraft.icao}"
         )
+        distance_m = bearing_degrees = None
+        if self._gps_fix and aircraft.has_position:
+            distance_m, bearing_degrees = distance_and_bearing(
+                self._gps_fix.latitude, self._gps_fix.longitude,
+                aircraft.latitude, aircraft.longitude,
+            )
         values = {
             "Center Frequency": "1090.000 MHz",
             "Bandwidth": aircraft.model or aircraft.type_designator or "UNKNOWN TYPE",
@@ -907,8 +953,14 @@ class AegisApp:
             "Detections": str(aircraft.messages),
             "Missed Scans": f"SEEN {aircraft.seen_seconds:.1f}s AGO",
             "Aircraft ID": aircraft.flight or aircraft.icao,
-            "Distance": "UNAVAILABLE",
-            "Bearing": "UNAVAILABLE",
+            "Distance": (
+                f"{distance_m / 1609.344:.1f} mi"
+                if distance_m is not None else "UNAVAILABLE"
+            ),
+            "Bearing": (
+                f"{bearing_degrees:.0f}°"
+                if bearing_degrees is not None else "UNAVAILABLE"
+            ),
             "Heading": f"{aircraft.track_degrees:.1f}°" if aircraft.track_degrees is not None else "UNAVAILABLE",
             "Altitude": f"{aircraft.altitude_ft:,} ft" if aircraft.altitude_ft is not None else "UNAVAILABLE",
         }
@@ -1077,6 +1129,11 @@ class AegisApp:
         self.online_map.draw(center_lat, center_lon, zoom)
         width = max(canvas.winfo_width(), 320)
         height = max(canvas.winfo_height(), 230)
+        if self._gps_fix:
+            self._draw_range_rings(
+                self._gps_fix.latitude, self._gps_fix.longitude,
+                center_lat, center_lon, zoom, width, height,
+            )
         for aircraft in positioned:
             x, y = self.online_map.project(
                 aircraft.latitude, aircraft.longitude, center_lat, center_lon, zoom
@@ -1110,6 +1167,44 @@ class AegisApp:
                 x + 9, y + 9, text="AEGIS", fill="#ffffff", anchor="w",
                 font=("Consolas", 8, "bold"),
             )
+
+    def _draw_range_rings(
+        self, home_lat: float, home_lon: float,
+        center_lat: float, center_lon: float, zoom: int,
+        width: int, height: int,
+    ) -> None:
+        """Draw adaptive distance rings around the measured Aegis position."""
+
+        home_x, home_y = self.online_map.project(
+            home_lat, home_lon, center_lat, center_lon, zoom
+        )
+        meters_per_pixel = (
+            156543.03392 * max(math.cos(math.radians(home_lat)), 0.01)
+            / (2 ** zoom)
+        )
+        visible_radius_m = min(width, height) * 0.43 * meters_per_pixel
+        for distance_m in range_ring_distances(visible_radius_m):
+            radius = distance_m / meters_per_pixel
+            self.map_canvas.create_oval(
+                home_x - radius, home_y - radius,
+                home_x + radius, home_y + radius,
+                outline=self.CYAN, width=1, dash=(5, 5),
+            )
+            miles = distance_m / 1609.344
+            self.map_canvas.create_text(
+                home_x + radius + 4, home_y,
+                text=f"{miles:g} mi", fill=self.CYAN, anchor="w",
+                font=("Consolas", 8, "bold"),
+            )
+        crosshair = 9
+        self.map_canvas.create_line(
+            home_x - crosshair, home_y, home_x + crosshair, home_y,
+            fill=self.CYAN, width=1,
+        )
+        self.map_canvas.create_line(
+            home_x, home_y - crosshair, home_x, home_y + crosshair,
+            fill=self.CYAN, width=1,
+        )
 
     def _change_map_zoom(self, delta: int) -> None:
         self._map_zoom = max(5, min(18, self._map_zoom + delta))
@@ -1272,6 +1367,45 @@ class AegisApp:
                 canvas.create_rectangle(x1, y1, x2, y1 + cell_h + 1,
                                         fill=palette[level], outline="")
         canvas.create_line(0, split, width, split, fill=self.BORDER)
+
+
+def range_ring_distances(visible_radius_m: float) -> tuple[float, ...]:
+    """Choose four readable, mile-based rings for the current map scale."""
+
+    if visible_radius_m <= 0:
+        return ()
+    target_step_miles = visible_radius_m / 1609.344 / 4
+    candidates = (0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500)
+    step_miles = max(
+        (value for value in candidates if value <= target_step_miles),
+        default=candidates[0],
+    )
+    return tuple(step_miles * index * 1609.344 for index in range(1, 5))
+
+
+def distance_and_bearing(
+    origin_lat: float, origin_lon: float,
+    target_lat: float, target_lon: float,
+) -> tuple[float, float]:
+    """Return great-circle distance in meters and initial true bearing."""
+
+    lat1, lat2 = math.radians(origin_lat), math.radians(target_lat)
+    delta_lat = lat2 - lat1
+    delta_lon = math.radians(target_lon - origin_lon)
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
+    )
+    distance_m = 6371008.8 * 2 * math.atan2(
+        math.sqrt(haversine), math.sqrt(max(0.0, 1 - haversine))
+    )
+    y = math.sin(delta_lon) * math.cos(lat2)
+    x = (
+        math.cos(lat1) * math.sin(lat2)
+        - math.sin(lat1) * math.cos(lat2) * math.cos(delta_lon)
+    )
+    bearing = (math.degrees(math.atan2(y, x)) + 360) % 360
+    return distance_m, bearing
 
 
 def main() -> None:
