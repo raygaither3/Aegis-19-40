@@ -1,6 +1,6 @@
 import unittest
 
-from src.aegis.adsb_source import parse_aircraft_json
+from src.aegis.adsb_source import classify_aircraft, parse_aircraft_json
 from src.aegis.online_map import geo_to_world, world_to_geo
 
 
@@ -13,15 +13,23 @@ class AdsbSourceTests(unittest.TestCase):
 
     def test_parses_positioned_and_unpositioned_aircraft(self) -> None:
         aircraft = parse_aircraft_json({"aircraft": [
-            {"hex": "abc123", "flight": " UAL12 ", "lat": 41.9,
+            {"hex": "abc123", "flight": " UAL12 ", "r": "N12345",
+             "t": "B739", "ownOp": "United Airlines", "lat": 41.9,
              "lon": -87.9, "alt_baro": 12000, "gs": 280.5,
              "track": 90, "messages": 42, "seen": 0.3},
             {"hex": "def456", "seen": 2.0},
         ]})
         self.assertEqual(aircraft[0].icao, "ABC123")
         self.assertEqual(aircraft[0].flight, "UAL12")
+        self.assertEqual(aircraft[0].registration, "N12345")
+        self.assertEqual(aircraft[0].model, "Boeing 737-900/900ER")
+        self.assertEqual(aircraft[0].aircraft_class, "COMMERCIAL (LIKELY)")
         self.assertTrue(aircraft[0].has_position)
         self.assertFalse(aircraft[1].has_position)
+
+    def test_military_database_flag_takes_priority(self) -> None:
+        item = {"hex": "ae1234", "t": "B738", "flight": "RCH123", "dbFlags": 1}
+        self.assertEqual(classify_aircraft(item), "MILITARY")
 
     def test_web_mercator_places_east_to_the_right(self) -> None:
         origin_x, origin_y = geo_to_world(0, 0, 4)

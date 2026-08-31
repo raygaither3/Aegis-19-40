@@ -749,19 +749,19 @@ class AegisApp:
 
     def _render_aircraft_table(self) -> None:
         self._clear_contacts()
-        for key, title in (("id", "ICAO / FLIGHT"), ("frequency", "ALTITUDE"),
-                           ("confidence", "SPEED"), ("state", "TRACK"),
-                           ("seen", "MSGS"), ("missed", "SEEN")):
+        for key, title in (("id", "ICAO / FLIGHT"), ("frequency", "AIRCRAFT"),
+                           ("confidence", "TYPE"), ("state", "ALTITUDE"),
+                           ("seen", "SPEED"), ("missed", "SEEN")):
             self.contact_table.heading(key, text=title)
         for aircraft in self._adsb_aircraft:
             row = self.contact_table.insert(
                 "", "end",
                 values=(
                     aircraft.flight or aircraft.icao,
+                    aircraft.model or aircraft.type_designator or "UNKNOWN",
+                    aircraft.aircraft_class,
                     f"{aircraft.altitude_ft:,} ft" if aircraft.altitude_ft is not None else "--",
                     f"{aircraft.speed_knots:.0f} kt" if aircraft.speed_knots is not None else "--",
-                    f"{aircraft.track_degrees:.0f}°" if aircraft.track_degrees is not None else "--",
-                    aircraft.messages,
                     f"{aircraft.seen_seconds:.1f}s",
                 ),
                 tags=("confirmed" if aircraft.has_position else "tentative",),
@@ -897,11 +897,13 @@ class AegisApp:
 
     def _show_aircraft(self, aircraft: AdsbAircraft) -> None:
         self.detail_title.configure(text=aircraft.flight or aircraft.icao, fg=self.GREEN)
-        self.detail_state.configure(text=f"MEASURED ADS-B  |  ICAO {aircraft.icao}")
+        self.detail_state.configure(
+            text=f"{aircraft.aircraft_class}  |  ICAO {aircraft.icao}"
+        )
         values = {
             "Center Frequency": "1090.000 MHz",
-            "Bandwidth": "MODE S / ADS-B",
-            "Peak Power": "UNAVAILABLE",
+            "Bandwidth": aircraft.model or aircraft.type_designator or "UNKNOWN TYPE",
+            "Peak Power": aircraft.registration or "NO REGISTRATION DATA",
             "Detections": str(aircraft.messages),
             "Missed Scans": f"SEEN {aircraft.seen_seconds:.1f}s AGO",
             "Aircraft ID": aircraft.flight or aircraft.icao,
@@ -912,6 +914,11 @@ class AegisApp:
         }
         for name, value in values.items():
             self.detail_fields[name].configure(text=value)
+        operator = aircraft.owner_operator or "operator unavailable"
+        self.classification_note.configure(
+            text=f"{operator} | Classification uses readsb database metadata and heuristics",
+            fg=self.AMBER if "LIKELY" in aircraft.aircraft_class else self.GREEN,
+        )
 
     def _show_contact(self, contact: ContactSnapshot) -> None:
         colors = {

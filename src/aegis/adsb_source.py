@@ -12,6 +12,11 @@ import time
 class AdsbAircraft:
     icao: str
     flight: str | None
+    registration: str | None
+    type_designator: str | None
+    model: str | None
+    owner_operator: str | None
+    aircraft_class: str
     latitude: float | None
     longitude: float | None
     altitude_ft: int | None
@@ -39,6 +44,11 @@ def parse_aircraft_json(data: dict) -> tuple[AdsbAircraft, ...]:
             AdsbAircraft(
                 icao=str(item["hex"]).upper(),
                 flight=_clean_text(item.get("flight")),
+                registration=_clean_text(item.get("r")),
+                type_designator=_clean_text(item.get("t")),
+                model=_aircraft_model(item),
+                owner_operator=_clean_text(item.get("ownOp")),
+                aircraft_class=classify_aircraft(item),
                 latitude=_number(item.get("lat")),
                 longitude=_number(item.get("lon")),
                 altitude_ft=int(altitude) if altitude is not None else None,
@@ -49,6 +59,60 @@ def parse_aircraft_json(data: dict) -> tuple[AdsbAircraft, ...]:
             )
         )
     return tuple(sorted(result, key=lambda aircraft: aircraft.seen_seconds))
+
+
+# Common ICAO type designators. readsb's aircraft database supplies the code;
+# this compact fallback makes the most frequently observed types human-readable.
+_TYPE_NAMES = {
+    "A20N": "Airbus A320neo", "A21N": "Airbus A321neo",
+    "A319": "Airbus A319", "A320": "Airbus A320", "A321": "Airbus A321",
+    "A332": "Airbus A330-200", "A333": "Airbus A330-300",
+    "A359": "Airbus A350-900", "A35K": "Airbus A350-1000",
+    "B38M": "Boeing 737 MAX 8", "B39M": "Boeing 737 MAX 9",
+    "B733": "Boeing 737-300", "B734": "Boeing 737-400",
+    "B735": "Boeing 737-500", "B736": "Boeing 737-600",
+    "B737": "Boeing 737-700", "B738": "Boeing 737-800",
+    "B739": "Boeing 737-900/900ER", "B752": "Boeing 757-200",
+    "B753": "Boeing 757-300", "B763": "Boeing 767-300",
+    "B772": "Boeing 777-200", "B77W": "Boeing 777-300ER",
+    "B788": "Boeing 787-8", "B789": "Boeing 787-9",
+    "B78X": "Boeing 787-10", "C172": "Cessna 172",
+    "C182": "Cessna 182", "C25A": "Cessna Citation CJ2",
+    "C25B": "Cessna Citation CJ3", "C25C": "Cessna Citation CJ4",
+    "CRJ2": "Bombardier CRJ-200", "CRJ7": "Bombardier CRJ-700",
+    "CRJ9": "Bombardier CRJ-900", "E170": "Embraer E170",
+    "E175": "Embraer E175", "E190": "Embraer E190",
+    "E195": "Embraer E195", "E75L": "Embraer E175 (long wing)",
+    "GLF4": "Gulfstream IV", "GLF5": "Gulfstream V",
+    "GLF6": "Gulfstream G650", "LJ35": "Learjet 35",
+    "PC12": "Pilatus PC-12", "SR22": "Cirrus SR22",
+}
+
+_AIRLINER_TYPES = {
+    code for code in _TYPE_NAMES
+    if code.startswith(("A2", "A3", "B3", "B7", "CRJ", "E17", "E19", "E75"))
+}
+_PRIVATE_TYPES = {"C172", "C182", "C25A", "C25B", "C25C", "GLF4", "GLF5",
+                  "GLF6", "LJ35", "PC12", "SR22"}
+
+
+def classify_aircraft(item: dict) -> str:
+    """Return an evidence-qualified operational class for a readsb record."""
+
+    flags = item.get("dbFlags", 0)
+    if isinstance(flags, int) and flags & 1:
+        return "MILITARY"
+    designator = (_clean_text(item.get("t")) or "").upper()
+    if designator in _PRIVATE_TYPES:
+        return "PRIVATE/GENERAL (LIKELY)"
+    if designator in _AIRLINER_TYPES and _clean_text(item.get("flight")):
+        return "COMMERCIAL (LIKELY)"
+    return "UNKNOWN"
+
+
+def _aircraft_model(item: dict) -> str | None:
+    designator = (_clean_text(item.get("t")) or "").upper()
+    return _TYPE_NAMES.get(designator) or _clean_text(item.get("desc")) or designator or None
 
 
 class ReadsbSource:
