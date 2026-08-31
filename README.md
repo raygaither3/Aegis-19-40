@@ -45,6 +45,20 @@ Build `readsb` with RTL-SDR support in `~/readsb-rtl`, then launch Aegis and
 select **Live ADS-B**. Aegis starts the receiver locally, reads its JSON output
 once per second, and stops it when the session or application closes.
 
+For aircraft registration, model, operator, and military metadata, install the
+optional offline `readsb` aircraft database:
+
+```bash
+mkdir -p ~/.cache/aegis
+wget -O ~/.cache/aegis/aircraft.csv.gz \
+  https://github.com/wiedehopf/tar1090-db/raw/refs/heads/csv/aircraft.csv.gz
+```
+
+Aegis detects this file automatically and starts `readsb` with database and
+long-type metadata enabled. Refresh the file periodically to pick up database
+updates. Without it, ADS-B position and flight data still work but aircraft
+identity fields may display as unknown.
+
 ```bash
 cd ~/Aegis-19-40
 python3 -m src.aegis.gui

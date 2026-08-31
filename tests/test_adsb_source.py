@@ -1,10 +1,19 @@
 import unittest
+from pathlib import Path
 
-from src.aegis.adsb_source import classify_aircraft, parse_aircraft_json
+from src.aegis.adsb_source import ReadsbSource, classify_aircraft, parse_aircraft_json
 from src.aegis.online_map import geo_to_world, world_to_geo
 
 
 class AdsbSourceTests(unittest.TestCase):
+    def test_database_is_added_to_readsb_command(self) -> None:
+        command = ReadsbSource.build_command(
+            Path("/opt/readsb"), Path("/tmp/aegis"), Path("/data/aircraft.csv.gz")
+        )
+        self.assertIn("--db-file", command)
+        self.assertIn(str(Path("/data/aircraft.csv.gz")), command)
+        self.assertIn("--db-file-lt", command)
+
     def test_web_mercator_round_trip(self) -> None:
         world = geo_to_world(41.881832, -87.623177, 11)
         latitude, longitude = world_to_geo(*world, 11)

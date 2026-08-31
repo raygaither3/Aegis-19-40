@@ -118,10 +118,12 @@ def _aircraft_model(item: dict) -> str | None:
 class ReadsbSource:
     """Own a readsb subprocess and expose its atomically-written JSON output."""
 
-    def __init__(self, data_directory: Path | None = None) -> None:
+    def __init__(self, data_directory: Path | None = None,
+                 database_file: Path | None = None) -> None:
         self.data_directory = data_directory or (
             Path.home() / ".cache" / "aegis" / "readsb"
         )
+        self.database_file = database_file
         self.process: subprocess.Popen | None = None
 
     @staticmethod
@@ -136,6 +138,33 @@ class ReadsbSource:
                 return candidate
         return None
 
+    @staticmethod
+    def find_database() -> Path | None:
+        candidates = (
+            Path.home() / ".cache" / "aegis" / "aircraft.csv.gz",
+            Path.home() / "readsb-rtl" / "aircraft.csv.gz",
+            Path("/usr/local/share/tar1090/aircraft.csv.gz"),
+            Path("/usr/share/tar1090/aircraft.csv.gz"),
+        )
+        return next((path for path in candidates if path.is_file()), None)
+
+    @staticmethod
+    def build_command(binary: Path, data_directory: Path,
+                      database_file: Path | None = None) -> list[str]:
+        command = [
+            str(binary),
+            "--device-type", "rtlsdr",
+            "--device", "0",
+            "--gain", "auto",
+            "--net",
+            f"--write-json={data_directory}",
+            "--write-json-every=1",
+            "--quiet",
+        ]
+        if database_file is not None:
+            command.extend(("--db-file", str(database_file), "--db-file-lt"))
+        return command
+
     def start(self) -> None:
         if self.process is not None and self.process.poll() is None:
             return
@@ -148,17 +177,9 @@ class ReadsbSource:
         aircraft_file = self.data_directory / "aircraft.json"
         if aircraft_file.exists():
             aircraft_file.unlink()
+        database_file = self.database_file or self.find_database()
         self.process = subprocess.Popen(
-            [
-                str(binary),
-                "--device-type", "rtlsdr",
-                "--device", "0",
-                "--gain", "auto",
-                "--net",
-                f"--write-json={self.data_directory}",
-                "--write-json-every=1",
-                "--quiet",
-            ],
+            self.build_command(binary, self.data_directory, database_file),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
